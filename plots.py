@@ -1,6 +1,58 @@
 import os
 import matplotlib.pyplot as plt
 from astropy.io import fits
+import numpy as np
+
+def show_fits_info(fits_file):
+    """
+    Opens a FITS file, shows its statistics (mean, min, max, median, and total pixel count),
+    and plots a histogram of pixel values with the statistics annotated on the plot.
+
+    Parameters:
+    fits_file (str): Path to the FITS file to analyze.
+    """
+    try:
+        # Open the FITS file
+        with fits.open(fits_file) as hdul:
+            data = hdul[0].data  # Assuming the data is in the primary HDU
+            
+            if data is None:
+                print(f"No data found in {fits_file}")
+                return
+            
+            # Calculate statistics
+            mean_val = np.mean(data)
+            min_val = np.min(data)
+            max_val = np.max(data)
+            median_val = np.median(data)
+            total_val = np.sum(data)  # Calculate the total pixel value
+
+            # Plot histogram
+            plt.figure()
+            plt.hist(data.flatten(), bins=500, color='blue', alpha=0.7)
+            plt.yscale('linear')  # Set y-axis to linear scale
+            plt.title(f'Histogram of FITS File: {os.path.basename(fits_file)}')
+            plt.xlabel('Pixel Value')
+            plt.ylabel('Count')
+
+            # Display statistics on the plot
+            textstr = (f'Total: {total_val:.2f}\n'
+                       f'Mean: {mean_val:.2f}\n'
+                       f'Median: {median_val:.2f}\n'
+                       f'Min: {min_val:.2f}\n'
+                       f'Max: {max_val:.2f}')
+                       
+            
+            # Add a text box with the statistics in the upper right corner of the plot
+            plt.gcf().text(0.95, 0.95, textstr, fontsize=12, verticalalignment='top', 
+                           horizontalalignment='right', bbox=dict(facecolor='white', alpha=0.5))
+
+            # Show the plot
+            plt.show()
+    
+    except Exception as e:
+        print(f"Error processing {fits_file}: {e}")
+
 
 def plot_histograms_for_master_flats(calibration_folder, output_folder):
     """

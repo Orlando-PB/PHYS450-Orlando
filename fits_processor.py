@@ -4,6 +4,10 @@ from astropy.io import fits
 from alignment import align_light_frames, save_aligned_frames
 from utils import sort_files_into_subfolders, load_combined_fits  # Importing the sorting function from the separate file
 
+import os
+import numpy as np
+from astropy.io import fits
+
 def process_light_images(base_folder, output_folder, use_flats=True, use_darks=True, use_biases=True, combine_lrgb=False):
     # First, sort files into subfolders
     sorted_categories = sort_files_into_subfolders(base_folder, output_folder)
@@ -28,8 +32,62 @@ def process_light_images(base_folder, output_folder, use_flats=True, use_darks=T
         flat_folder = os.path.join(base_folder, 'Flats')
         create_master_flats_for_filters(flat_folder, calibration_folder, master_bias)
 
-    # Placeholder for further processing of the light frames
-    # Aligned frames, applying corrections, etc.
+    # Path to the main lights folder
+    light_folder = os.path.join(base_folder, 'Lights')
+    calibrated_folder = os.path.join(output_folder, 'calibrated')
+    os.makedirs(calibrated_folder, exist_ok=True)
+    # Print the structure of sorted_categories['Lights']
+    print('test')
+    print(f"sorted_categories: {sorted_categories}")
+
+
+    # Loop over each filter found in the 'Lights' category
+    for filter_name, light_files in sorted_categories['Light'].items():
+        print('4')
+        print(f"Processing filter: {filter_name}")
+
+        # Create a subfolder in the calibrated directory for this filter
+        filter_calibrated_folder = os.path.join(calibrated_folder, filter_name)
+        os.makedirs(filter_calibrated_folder, exist_ok=True)
+
+        # Check if there are any light files for this filter
+        if not light_files:
+            print(f"No light frames found for filter: {filter_name}")
+            continue
+
+        # Loop over each light file for the current filter
+        for light_file in light_files:
+            try:
+                # Construct the path to the current light frame
+                light_path = os.path.join(light_folder, filter_name, light_file)
+                print(f"Processing light frame: {light_path}")
+
+                # Open the light frame FITS file
+                with fits.open(light_path) as hdul:
+                    light_data = hdul[0].data.astype(np.float32)
+
+                    # Subtract the master bias if available
+                    if master_bias is not None:
+                        light_data -= master_bias
+
+                    # Subtract the master dark if available
+                    if master_dark is not None:
+                        light_data -= master_dark
+
+                    # Apply the master flat if available
+                    if use_flats:
+                        master_flat = load_master_frame(calibration_folder, f"master_flat_{filter_name}")
+                        if master_flat is not None:
+                            light_data /= master_flat
+
+                    # Save the calibrated light frame to the calibrated subfolder
+                    calibrated_light_path = os.path.join(filter_calibrated_folder, f"calibrated_{light_file}")
+                    fits.writeto(calibrated_light_path, light_data, hdul[0].header, overwrite=True)
+                    print(f"Calibrated light frame saved to {calibrated_light_path}")
+
+            except Exception as e:
+                print(f"Error processing {light_file}: {e}")
+
 
 def calculate_median_frame(frames):
     """

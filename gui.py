@@ -1,7 +1,8 @@
 import os
+import time
 import tkinter as tk
 from tkinter import filedialog, messagebox
-from plots import plot_histograms_for_master_flats  # Import the histogram plotting function
+from plots import plot_histograms_for_master_flats, show_fits_info  # Import the new function
 
 def run_gui(base_folder, output_folder, process_func):
     root = tk.Tk()
@@ -16,6 +17,8 @@ def run_gui(base_folder, output_folder, process_func):
 
     def start_processing():
         try:
+            start_time = time.time()  # Record the start time
+            
             # Start the main processing function
             total_files = process_func(base_folder, output_folder, use_flats_var.get(), use_darks_var.get(), use_biases_var.get(), combine_lrgb_var.get())
             
@@ -25,10 +28,14 @@ def run_gui(base_folder, output_folder, process_func):
                 hist_output_folder = os.path.join(output_folder, "histograms")
                 plot_histograms_for_master_flats(flat_folder, hist_output_folder)
             
-            messagebox.showinfo("Success", f"Processing complete. {total_files} images processed. Output saved to {output_folder}")
+            end_time = time.time()  # Record the end time
+            processing_time = end_time - start_time  # Calculate the total processing time
+            
+            messagebox.showinfo("Success", f"Processing complete. {total_files} images processed.\n"
+                                           f"Output saved to {output_folder}\n"
+                                           f"Time taken: {processing_time:.2f} seconds.")
         except Exception as e:
             messagebox.showerror("Error", str(e))
-
 
     # Folder selection
     def select_folder():
@@ -36,6 +43,15 @@ def run_gui(base_folder, output_folder, process_func):
         if folder_selected:
             base_folder_entry.delete(0, tk.END)
             base_folder_entry.insert(0, folder_selected)
+
+    # File selection for viewing statistics
+    def select_file_and_show_info():
+        file_selected = filedialog.askopenfilename(filetypes=[("FITS files", "*.fit *.fits")])
+        if file_selected:
+            try:
+                show_fits_info(file_selected)
+            except Exception as e:
+                messagebox.showerror("Error", str(e))
 
     # GUI Layout
     frame = tk.Frame(root)
@@ -55,5 +71,6 @@ def run_gui(base_folder, output_folder, process_func):
     tk.Checkbutton(frame, text="Plot Histograms", variable=plot_histograms_var).grid(row=5, column=0, sticky="w")
 
     tk.Button(frame, text="Start Processing", command=start_processing).grid(row=6, column=1, pady=10)
+    tk.Button(frame, text="Open FITS and Show Info", command=select_file_and_show_info).grid(row=7, column=1, pady=10)  # New button to open FITS and show info
 
     root.mainloop()
