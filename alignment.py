@@ -2,8 +2,6 @@ import os
 from astropy.io import fits
 from astropy.wcs import WCS
 from reproject import reproject_interp
-from astropy.coordinates import SkyCoord
-from astropy.wcs.utils import skycoord_to_pixel
 import numpy as np
 
 def get_wcs_from_header(file_path):
@@ -25,30 +23,33 @@ def align_to_reference_frame(file_path, reference_wcs, shape_out):
         reprojected_data, _ = reproject_interp((data, wcs), reference_wcs, shape_out=shape_out)
     return reprojected_data
 
-def align_light_frames(base_folder, reference_frame=None):
+def align_light_frames(lights_folder):
     """
-    Align all light frames to a reference WCS frame. If no reference frame is provided,
-    the first light frame will be used as the reference.
+    Align all light frames found in the Lights folder and its subfolders to a reference WCS frame.
+    The first light frame will be used as the reference.
     """
-    light_files = [f for f in os.listdir(base_folder) if "Light" in f and f.endswith('.fit')]
+    light_files = []
+    
+    # Traverse through each filter folder inside the 'Lights' folder
+    for root, _, files in os.walk(lights_folder):
+        for file in files:
+            if file.endswith('.fit'):
+                light_files.append(os.path.join(root, file))
+
     if not light_files:
         raise FileNotFoundError("No light frames found for alignment.")
 
     reference_wcs = None
     aligned_frames = []
 
-    # If no reference frame is provided, use the first light frame as reference
-    if reference_frame is None:
-        reference_frame = os.path.join(base_folder, light_files[0])
-        reference_wcs = get_wcs_from_header(reference_frame)
-        with fits.open(reference_frame) as hdul:
-            shape_out = hdul[0].data.shape
+    # Use the first light frame as reference
+    reference_frame = light_files[0]
+    reference_wcs = get_wcs_from_header(reference_frame)
+    with fits.open(reference_frame) as hdul:
+        shape_out = hdul[0].data.shape
 
     # Align each light frame to the reference WCS
-    for file in light_files:
-        file_path = os.path.join(base_folder, file)
-        if reference_wcs is None:
-            reference_wcs = get_wcs_from_header(file_path)
+    for file_path in light_files:
         aligned_data = align_to_reference_frame(file_path, reference_wcs, shape_out)
         aligned_frames.append(aligned_data)
 
