@@ -3,19 +3,37 @@ import time
 import tkinter as tk
 from tkinter import filedialog, messagebox
 from plots import plot_histograms_for_master_flats, show_fits_info  # Import the new function
+from datetime import datetime
 
-def run_gui(base_folder, output_folder, process_func):
+# Initialize base folder globally
+base_folder = "./demo"
+
+def run_gui(process_func):
     root = tk.Tk()
     root.title("FITS Image Processor")
 
+    # Ensure the window opens in the foreground
+    root.lift()  # Raise the window to the front
+    root.focus_force()  # Force focus on the window
+
     # Variables to hold toggle states
-    use_flats_var = tk.BooleanVar(value=True)  # Default: use flats
-    use_darks_var = tk.BooleanVar(value=True)  # Default: use darks
-    use_biases_var = tk.BooleanVar(value=True)  # Default: use biases
-    combine_lrgb_var = tk.BooleanVar(value=True)  # Default: combine LRGB
-    plot_histograms_var = tk.BooleanVar(value=False)  # Default: don't plot histograms
+    use_flats_var = tk.BooleanVar(value=True)
+    use_darks_var = tk.BooleanVar(value=True)
+    use_biases_var = tk.BooleanVar(value=True)
+    combine_lrgb_var = tk.BooleanVar(value=True)
+    plot_histograms_var = tk.BooleanVar(value=False)
 
     def start_processing():
+        global base_folder  # Ensure we use the updated base_folder
+
+        # Create a unique output folder name using the current date and time
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_folder = os.path.join(base_folder, f"Output_{timestamp}")
+
+        # Ensure the unique output folder exists
+        if not os.path.exists(output_folder):
+            os.makedirs(output_folder)
+
         try:
             start_time = time.time()  # Record the start time
             
@@ -37,12 +55,15 @@ def run_gui(base_folder, output_folder, process_func):
         except Exception as e:
             messagebox.showerror("Error", str(e))
 
+
     # Folder selection
     def select_folder():
+        global base_folder  # Ensure we can modify the base_folder
         folder_selected = filedialog.askdirectory()
         if folder_selected:
             base_folder_entry.delete(0, tk.END)
             base_folder_entry.insert(0, folder_selected)
+            base_folder = folder_selected  # Update base_folder
 
     # File selection for viewing statistics
     def select_file_and_show_info():

@@ -1,10 +1,13 @@
 import os
 import shutil
+import fnmatch
+from astropy.io import fits
 
-def sort_files_into_subfolders(base_folder,output_folder):
+def sort_files_into_subfolders(base_folder, output_folder):
     """
     Sort files into subfolders: Lights (separated by filters), Darks, Bias, Flats (separated by filters).
     It searches all subfolders, moves required files, and deletes empty folders afterward.
+    Skips folders matching the output folder pattern './base_folder/Output*'.
     """
     categories = {
         "Light": {},
@@ -13,6 +16,8 @@ def sort_files_into_subfolders(base_folder,output_folder):
         "Flat": {}
     }
 
+    output_folder_pattern = os.path.join(base_folder, "Output*")
+
     # Create subfolders for Lights, Darks, Bias, and Flats
     for folder in ['Lights', 'Darks', 'Bias', 'Flats']:
         folder_path = os.path.join(base_folder, folder)
@@ -20,26 +25,32 @@ def sort_files_into_subfolders(base_folder,output_folder):
             os.makedirs(folder_path)
 
     # Function to clean up empty folders
-    def delete_empty_folders(folder, output_folder):
+    def delete_empty_folders(folder):
         """
-        Delete the folder if it's empty, unless it's the skip_folder.
+        Delete the folder if it's empty and doesn't match the output pattern.
         """
-        # Check if the folder is not the one you want to skip
-        if os.path.abspath(folder) != os.path.abspath(output_folder) and not os.listdir(folder):
+        if not fnmatch.fnmatch(folder, output_folder_pattern) and not os.listdir(folder):
             os.rmdir(folder)
             print(f"Deleted empty folder: {folder}")
 
-                
-
     # Recursively walk through the base folder and subfolders
     for root, _, files in os.walk(base_folder):
+        # Skip folders that match the output folder pattern
+        if fnmatch.fnmatch(root, output_folder_pattern):
+            continue
+
         for file in files:
             if file.endswith('.fit'):
                 file_path = os.path.join(root, file)
+                
+                # Open FITS file to read the header
+                with fits.open(file_path) as hdul:
+                    header = hdul[0].header
+                    image_type = header.get('IMAGETYP', '').strip()  # Get image type (Light, Dark, Bias, Flat)
+                    filter_name = header.get('FILTER', 'Unknown').strip()  # Get filter name
+                    exposure_time = header.get('EXPTIME', None)  # Get exposure time if needed
 
-                if "Light" in file:
-                    # Extract filter name
-                    filter_name = file.split("_")[4]  # Assuming the filter is the 5th component in the filename
+                if "Light" in image_type:
                     if filter_name not in categories["Light"]:
                         categories["Light"][filter_name] = []
                         light_folder = os.path.join(base_folder, 'Lights', filter_name)
@@ -47,17 +58,15 @@ def sort_files_into_subfolders(base_folder,output_folder):
                     categories["Light"][filter_name].append(file)
                     shutil.move(file_path, os.path.join(base_folder, 'Lights', filter_name, file))
 
-                elif "Dark" in file:
+                elif "Dark" in image_type:
                     categories["Dark"].append(file)
                     shutil.move(file_path, os.path.join(base_folder, 'Darks', file))
 
-                elif "Bias" in file:
+                elif "Bias" in image_type:
                     categories["Bias"].append(file)
                     shutil.move(file_path, os.path.join(base_folder, 'Bias', file))
 
-                elif "Flat" in file:
-                    # Extract filter name
-                    filter_name = file.split("_")[3]  # Assuming the filter is the 5th component in the filename
+                elif "Flat" in image_type:
                     if filter_name not in categories["Flat"]:
                         categories["Flat"][filter_name] = []
                         flat_folder = os.path.join(base_folder, 'Flats', filter_name)
@@ -66,9 +75,11 @@ def sort_files_into_subfolders(base_folder,output_folder):
                     shutil.move(file_path, os.path.join(base_folder, 'Flats', filter_name, file))
 
         # After processing all files in the folder, delete the folder if it's empty
-        delete_empty_folders(root,output_folder)
+        delete_empty_folders(root)
 
     return categories
+
+
 
 
 def load_combined_fits(base_folder, category):

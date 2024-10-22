@@ -6,7 +6,8 @@ import numpy as np
 def show_fits_info(fits_file):
     """
     Opens a FITS file, shows its statistics (mean, min, max, median, and total pixel count),
-    and plots a histogram of pixel values with the statistics annotated on the plot.
+    and plots both a histogram of pixel values and the image itself. Hovering over the image
+    shows the pixel value and highlights its position on the histogram using a vertical line.
 
     Parameters:
     fits_file (str): Path to the FITS file to analyze.
@@ -27,13 +28,25 @@ def show_fits_info(fits_file):
             median_val = np.median(data)
             total_val = np.sum(data)  # Calculate the total pixel value
 
+            # Set up the figure and axes
+            fig, (ax_img, ax_hist) = plt.subplots(1, 2, figsize=(12, 6))
+
+            # Plot the image from the FITS file
+            img = ax_img.imshow(data, cmap='gray', origin='lower', vmin=min_val, vmax=max_val)
+            fig.colorbar(img, ax=ax_img)
+            ax_img.set_title(f'Image of FITS File: {os.path.basename(fits_file)}')
+            ax_img.set_xlabel('X Pixel')
+            ax_img.set_ylabel('Y Pixel')
+
             # Plot histogram
-            plt.figure()
-            plt.hist(data.flatten(), bins=500, color='blue', alpha=0.7)
-            plt.yscale('linear')  # Set y-axis to linear scale
-            plt.title(f'Histogram of FITS File: {os.path.basename(fits_file)}')
-            plt.xlabel('Pixel Value')
-            plt.ylabel('Count')
+            n, bins, patches = ax_hist.hist(data.flatten(), bins=1000, color='blue', alpha=0.5)
+            ax_hist.set_yscale('linear')  # Set y-axis to linear scale
+            ax_hist.set_title(f'Histogram of FITS File: {os.path.basename(fits_file)}')
+            ax_hist.set_xlabel('Pixel Value')
+            ax_hist.set_ylabel('Count')
+
+            # Add vertical line for hover indicator (initially not visible)
+            hover_line = ax_hist.axvline(x=0, color='red', linestyle='--', visible=False)
 
             # Display statistics on the plot
             textstr = (f'Total: {total_val:.2f}\n'
@@ -41,17 +54,42 @@ def show_fits_info(fits_file):
                        f'Median: {median_val:.2f}\n'
                        f'Min: {min_val:.2f}\n'
                        f'Max: {max_val:.2f}')
-                       
             
-            # Add a text box with the statistics in the upper right corner of the plot
-            plt.gcf().text(0.95, 0.95, textstr, fontsize=12, verticalalignment='top', 
-                           horizontalalignment='right', bbox=dict(facecolor='white', alpha=0.5))
+            # Add a text box with the statistics in the upper right corner of the histogram
+            fig.text(0.95, 0.95, textstr, fontsize=12, verticalalignment='top', 
+                     horizontalalignment='right', bbox=dict(facecolor='white', alpha=0.5))
+
+            # Event handler for hovering over the image
+            def on_hover(event):
+                # Check if the mouse is over the image axes
+                if event.inaxes == ax_img:
+                    # Get the pixel coordinates
+                    x, y = int(event.xdata), int(event.ydata)
+
+                    # Check if the coordinates are within the image bounds
+                    if 0 <= x < data.shape[1] and 0 <= y < data.shape[0]:
+                        # Get the pixel value at (x, y)
+                        pixel_value = data[y, x]
+
+                        # Update the position of the vertical line, wrapping the scalar in a list
+                        hover_line.set_xdata([pixel_value])
+                        hover_line.set_visible(True)
+
+                        # Update the image title with pixel info
+                        ax_img.set_title(f'Pixel: ({x}, {y}) | Value: {pixel_value}')
+                        fig.canvas.draw_idle()
+
+
+            # Connect the hover event to the handler
+            fig.canvas.mpl_connect('motion_notify_event', on_hover)
 
             # Show the plot
+            plt.tight_layout()
             plt.show()
     
     except Exception as e:
         print(f"Error processing {fits_file}: {e}")
+
 
 
 def plot_histograms_for_master_flats(calibration_folder, output_folder):

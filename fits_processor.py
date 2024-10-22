@@ -43,7 +43,6 @@ def process_light_images(base_folder, output_folder, use_flats=True, use_darks=T
 
     # Loop over each filter found in the 'Lights' category
     for filter_name, light_files in sorted_categories['Light'].items():
-        print('4')
         print(f"Processing filter: {filter_name}")
 
         # Create a subfolder in the calibrated directory for this filter
@@ -66,13 +65,15 @@ def process_light_images(base_folder, output_folder, use_flats=True, use_darks=T
                 with fits.open(light_path) as hdul:
                     light_data = hdul[0].data.astype(np.float32)
 
-                    # Subtract the master bias if available
-                    if master_bias is not None:
-                        light_data -= master_bias
+                # Subtract the master bias if available
+                if master_bias is not None:
+                    light_data -= master_bias
+                    light_data = np.clip(light_data, 0, None)  # Ensure no negative values
 
-                    # Subtract the master dark if available
-                    if master_dark is not None:
-                        light_data -= master_dark
+                # Subtract the master dark if available
+                if master_dark is not None:
+                    light_data -= master_dark
+                    light_data = np.clip(light_data, 0, None)  # Ensure no negative values
 
                     # Apply the master flat if available
                     if use_flats:
@@ -150,13 +151,18 @@ def create_master_dark(dark_folder, calibration_folder, master_bias=None):
             dark_data = hdul[0].data.astype(np.float32)
             if master_bias is not None:
                 dark_data -= master_bias  # Subtract master bias from each dark frame
+                dark_data = np.clip(dark_data, 0, None)  # Clip negative values to 0
             dark_frames.append(dark_data)
 
+    # Compute the median of the clipped dark frames
     master_dark = calculate_median_frame(dark_frames)
+    master_dark = np.clip(master_dark, 0, None)  # Ensure no negative values in the final master dark
 
+    # Save the master dark frame
     master_dark_path = os.path.join(calibration_folder, 'master_dark.fit')
     fits.writeto(master_dark_path, master_dark, overwrite=True)
     print(f"Master dark saved to {master_dark_path}")
+
 
 def create_master_bias(bias_folder, calibration_folder):
     """
