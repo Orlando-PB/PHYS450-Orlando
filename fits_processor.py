@@ -1,14 +1,15 @@
 import os
 import numpy as np
 from astropy.io import fits
-from alignment import align_light_frames, save_aligned_frames
-from utils import sort_files_into_subfolders, load_combined_fits  # Importing the sorting function from the separate file
+from utils import sort_files_into_subfolders, load_combined_fits
+from source_extraction import extract_bright_stars
+from align_and_stack import align_and_stack_images
 
 import os
 import numpy as np
 from astropy.io import fits
 
-def process_light_images(base_folder, output_folder, use_flats=True, use_darks=True, use_biases=True, combine_lrgb=False):
+def process_light_images(base_folder, output_folder, use_flats=True, use_darks=True, use_biases=True, stack=False):
     # First, sort files into subfolders
     sorted_categories = sort_files_into_subfolders(base_folder, output_folder)
 
@@ -36,10 +37,6 @@ def process_light_images(base_folder, output_folder, use_flats=True, use_darks=T
     light_folder = os.path.join(base_folder, 'Lights')
     calibrated_folder = os.path.join(output_folder, 'calibrated')
     os.makedirs(calibrated_folder, exist_ok=True)
-    # Print the structure of sorted_categories['Lights']
-    print('test')
-    print(f"sorted_categories: {sorted_categories}")
-
 
     # Loop over each filter found in the 'Lights' category
     for filter_name, light_files in sorted_categories['Light'].items():
@@ -48,11 +45,6 @@ def process_light_images(base_folder, output_folder, use_flats=True, use_darks=T
         # Create a subfolder in the calibrated directory for this filter
         filter_calibrated_folder = os.path.join(calibrated_folder, filter_name)
         os.makedirs(filter_calibrated_folder, exist_ok=True)
-
-        # Check if there are any light files for this filter
-        if not light_files:
-            print(f"No light frames found for filter: {filter_name}")
-            continue
 
         # Loop over each light file for the current filter
         for light_file in light_files:
@@ -75,19 +67,39 @@ def process_light_images(base_folder, output_folder, use_flats=True, use_darks=T
                     light_data -= master_dark
                     light_data = np.clip(light_data, 0, None)  # Ensure no negative values
 
-                    # Apply the master flat if available
-                    if use_flats:
-                        master_flat = load_master_frame(calibration_folder, f"master_flat_{filter_name}")
-                        if master_flat is not None:
-                            light_data /= master_flat
+                # Apply the master flat if available
+                if use_flats:
+                    master_flat = load_master_frame(calibration_folder, f"master_flat_{filter_name}")
+                    if master_flat is not None:
+                        light_data /= master_flat
 
-                    # Save the calibrated light frame to the calibrated subfolder
-                    calibrated_light_path = os.path.join(filter_calibrated_folder, f"calibrated_{light_file}")
-                    fits.writeto(calibrated_light_path, light_data, hdul[0].header, overwrite=True)
-                    print(f"Calibrated light frame saved to {calibrated_light_path}")
+                # Save the calibrated light frame to the calibrated subfolder
+                calibrated_light_path = os.path.join(filter_calibrated_folder, f"calibrated_{light_file}")
+                fits.writeto(calibrated_light_path, light_data, hdul[0].header, overwrite=True)
+                print(f"Calibrated light frame saved to {calibrated_light_path}")
 
             except Exception as e:
                 print(f"Error processing {light_file}: {e}")
+
+    # Stacking and LRGB combination
+    if stack:
+        stacked_folder = os.path.join(output_folder, 'stacked')
+        os.makedirs(stacked_folder, exist_ok=True)
+
+        stacked_images = []
+
+        for filter_name, light_files in sorted_categories['Light'].items():
+            print(f"Extracting stars for filter: {filter_name}")
+
+            # Extract star positions after all images for this filter are calibrated
+            for light_file in light_files:
+                calibrated_light_path = os.path.join(calibrated_folder, filter_name, f"calibrated_{light_file}")
+                extract_bright_stars(calibrated_light_path)
+               
+            # Align and stack images after extracting star positions
+            filter_output_folder = os.path.join(stacked_folder, filter_name)
+            os.makedirs(filter_output_folder, exist_ok=True)
+            align_and_stack_images(os.path.join(calibrated_folder, filter_name), filter_output_folder)
 
 
 def calculate_median_frame(frames):

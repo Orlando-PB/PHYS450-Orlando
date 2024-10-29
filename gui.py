@@ -20,7 +20,7 @@ def run_gui(process_func):
     use_flats_var = tk.BooleanVar(value=True)
     use_darks_var = tk.BooleanVar(value=True)
     use_biases_var = tk.BooleanVar(value=True)
-    combine_lrgb_var = tk.BooleanVar(value=True)
+    stack_var = tk.BooleanVar(value=True)
     plot_histograms_var = tk.BooleanVar(value=False)
 
     def start_processing():
@@ -38,7 +38,7 @@ def run_gui(process_func):
             start_time = time.time()  # Record the start time
             
             # Start the main processing function
-            total_files = process_func(base_folder, output_folder, use_flats_var.get(), use_darks_var.get(), use_biases_var.get(), combine_lrgb_var.get())
+            total_files = process_func(base_folder, output_folder, use_flats_var.get(), use_darks_var.get(), use_biases_var.get(), stack_var.get())
             
             # If plotting histograms is enabled
             if plot_histograms_var.get():
@@ -88,7 +88,7 @@ def run_gui(process_func):
     tk.Checkbutton(frame, text="Use Flats", variable=use_flats_var).grid(row=1, column=0, sticky="w")
     tk.Checkbutton(frame, text="Use Darks", variable=use_darks_var).grid(row=2, column=0, sticky="w")
     tk.Checkbutton(frame, text="Use Biases", variable=use_biases_var).grid(row=3, column=0, sticky="w")
-    tk.Checkbutton(frame, text="Combine LRGB", variable=combine_lrgb_var).grid(row=4, column=0, sticky="w")
+    tk.Checkbutton(frame, text="Stack", variable=stack_var).grid(row=4, column=0, sticky="w")
     tk.Checkbutton(frame, text="Plot Histograms", variable=plot_histograms_var).grid(row=5, column=0, sticky="w")
 
     tk.Button(frame, text="Start Processing", command=start_processing).grid(row=6, column=1, pady=10)

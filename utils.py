@@ -2,6 +2,7 @@ import os
 import shutil
 import fnmatch
 from astropy.io import fits
+import numpy as np
 
 def sort_files_into_subfolders(base_folder, output_folder):
     """
@@ -44,8 +45,8 @@ def sort_files_into_subfolders(base_folder, output_folder):
                 file_path = os.path.join(root, file)
                 
                 # Open FITS file to read the header
-                with fits.open(file_path) as hdul:
-                    header = hdul[0].header
+                with fits.open(file_path) as hdul: 
+                    header = hdul[0].header 
                     image_type = header.get('IMAGETYP', '').strip()  # Get image type (Light, Dark, Bias, Flat)
                     filter_name = header.get('FILTER', 'Unknown').strip()  # Get filter name
                     exposure_time = header.get('EXPTIME', None)  # Get exposure time if needed
@@ -80,7 +81,21 @@ def sort_files_into_subfolders(base_folder, output_folder):
     return categories
 
 
+def calculate_median_frame(frames):
+    """
+    Calculate the median of a list of FITS frames.
 
+    Parameters:
+    frames : list of numpy arrays
+        List of FITS frame data to compute the median.
+
+    Returns:
+    numpy array : Median frame.
+    """
+    stacked_frames = np.stack(frames, axis=0)
+    median_frame = np.median(stacked_frames, axis=0)
+    
+    return median_frame
 
 def load_combined_fits(base_folder, category):
     """
