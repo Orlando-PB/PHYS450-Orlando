@@ -86,8 +86,6 @@ def process_light_images(base_folder, output_folder, use_flats=True, use_darks=T
         stacked_folder = os.path.join(output_folder, 'stacked')
         os.makedirs(stacked_folder, exist_ok=True)
 
-        stacked_images = []
-
         for filter_name, light_files in sorted_categories['Light'].items():
             print(f"Extracting stars for filter: {filter_name}")
 

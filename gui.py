@@ -2,7 +2,7 @@ import os
 import time
 import tkinter as tk
 from tkinter import filedialog, messagebox
-from plots import plot_histograms_for_master_flats, show_fits_info  # Import the new function
+from plots import show_fits_info  # Import the new function
 from datetime import datetime
 
 # Initialize base folder globally
@@ -21,7 +21,6 @@ def run_gui(process_func):
     use_darks_var = tk.BooleanVar(value=True)
     use_biases_var = tk.BooleanVar(value=True)
     stack_var = tk.BooleanVar(value=True)
-    plot_histograms_var = tk.BooleanVar(value=False)
 
     def start_processing():
         global base_folder  # Ensure we use the updated base_folder
@@ -89,7 +88,6 @@ def run_gui(process_func):
     tk.Checkbutton(frame, text="Use Darks", variable=use_darks_var).grid(row=2, column=0, sticky="w")
     tk.Checkbutton(frame, text="Use Biases", variable=use_biases_var).grid(row=3, column=0, sticky="w")
     tk.Checkbutton(frame, text="Stack", variable=stack_var).grid(row=4, column=0, sticky="w")
-    tk.Checkbutton(frame, text="Plot Histograms", variable=plot_histograms_var).grid(row=5, column=0, sticky="w")
 
     tk.Button(frame, text="Start Processing", command=start_processing).grid(row=6, column=1, pady=10)
     tk.Button(frame, text="Open FITS and Show Info", command=select_file_and_show_info).grid(row=7, column=1, pady=10)  # New button to open FITS and show info
