@@ -104,11 +104,11 @@ def find_nearest_star_pairs(reference_stars, stars):
     """
     if len(reference_stars) == 0 or len(stars) == 0:
         raise ValueError("No stars detected in one of the images.")
-        
+
     ref_tree = cKDTree(reference_stars)
     matched_pairs = []
     for star in stars:
         dist, idx = ref_tree.query(star)
         matched_pairs.append((reference_stars[idx], star))
-    
+
     return matched_pairs
