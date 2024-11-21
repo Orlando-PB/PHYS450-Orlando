@@ -5,18 +5,9 @@ from scipy.ndimage import shift
 from scipy.spatial import cKDTree
 
 def align_and_stack_images(calibrated_folder, output_folder):
-    """
-    Align and stack calibrated images for a given filter using individual star position files.
+    # Align and Stack image frames
 
-    Parameters:
-    calibrated_folder : str
-        The folder containing calibrated light frames for a filter.
-    output_folder : str
-        The folder to save the stacked image.
 
-    Returns:
-    None
-    """
     # Collect star position files and their corresponding image files
     star_positions = {}
     for file_name in os.listdir(calibrated_folder):
@@ -47,8 +38,7 @@ def align_and_stack_images(calibrated_folder, output_folder):
         avg_shift = np.mean(shifts, axis=0)
 
         light_path = os.path.join(calibrated_folder, light_file)
-        if light_file == reference_file:
-            # No need to shift the reference image
+        if light_file == reference_file: # Don't shift reference
             with fits.open(light_path) as hdul:
                 aligned_frames.append(hdul[0].data.astype(np.float32))
         else:
@@ -71,16 +61,7 @@ def align_and_stack_images(calibrated_folder, output_folder):
     return stacked_frame
 
 def load_star_positions(star_file):
-    """
-    Load star positions from a text file.
-
-    Parameters:
-    star_file : str
-        Path to the text file containing star positions.
-
-    Returns:
-    List of tuples containing (x, y) positions of stars.
-    """
+    # Get star positions
     positions = []
     with open(star_file, 'r') as f:
         for line in f:
@@ -90,18 +71,7 @@ def load_star_positions(star_file):
     return positions
 
 def find_nearest_star_pairs(reference_stars, stars):
-    """
-    Find the nearest matching pairs of stars between reference and current stars.
-
-    Parameters:
-    reference_stars : list of tuples
-        The (x, y) positions of stars in the reference image.
-    stars : list of tuples
-        The (x, y) positions of stars in the current image.
-
-    Returns:
-    List of tuples with matched (reference_star, current_star) pairs.
-    """
+    
     if len(reference_stars) == 0 or len(stars) == 0:
         raise ValueError("No stars detected in one of the images.")
 

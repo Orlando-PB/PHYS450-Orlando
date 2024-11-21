@@ -1,41 +1,35 @@
 import os
 import threading
-
+import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.widgets import Button
-import numpy as np
 from astropy.io import fits
 from astropy.wcs import WCS
 import astropy.units as u
 from astropy.coordinates import SkyCoord
+from astropy.visualization.wcsaxes import WCSAxes  # Import WCSAxes for WCS projection
 
 def show_fits_info(fits_file):
+    # Function to View a FITS file
+
     try:
         # Open the FITS file
         with fits.open(fits_file) as hdul:
-            data = hdul[0].data  # Assuming the data is in the primary HDU
-            header = hdul[0].header  # Get the FITS header for RA/DEC info
+            data = hdul[0].data
+            header = hdul[0].header  # Get the FITS header
 
-            if data is None:
-                print(f"No data found in {fits_file}")
-                return
-
-            # Attempt to create a WCS object
-            try:
-                w = WCS(header)
-                has_wcs = w.has_celestial
-            except Exception:
-                has_wcs = False
-
-            # Check if star positions file exists for this FITS file
+            # Check if star positions file is generated for this FITS file - Needs improvement
             star_positions_file = fits_file.replace('.fits', '_star_positions.txt').replace('.fit', '_star_positions.txt')
             star_positions = None
             if os.path.exists(star_positions_file):
                 with open(star_positions_file, 'r') as f:
                     star_positions = []
                     for line in f:
-                        x, y = line.strip().split(',')
-                        star_positions.append((float(x), float(y)))
+                        try:
+                            x, y = line.strip().split(',')
+                            star_positions.append((float(x), float(y)))
+                        except ValueError:
+                            continue  # Skip invalid lines
             else:
                 print("No star positions available for this file.")
 
@@ -45,51 +39,68 @@ def show_fits_info(fits_file):
             max_val = np.max(data)
             median_val = np.median(data)
             std_dev = np.std(data)
-            total_pixels = data.size / 1e6  # Convert to megapixels
+            total_pixels = data.size / 1e6  # Converting to megapixels
 
-            # Calculate auto-stretch limits
+            # Calculate auto-stretch
             lower_auto_percentile = np.percentile(data, 1)
             upper_auto_percentile = np.percentile(data, 99.2)
 
             # Remove the default toolbar
             plt.rcParams['toolbar'] = 'none'
 
-            # Set up the figure and axes with custom layout
+            # Set up the figure
             fig = plt.figure(figsize=(10, 8))
 
-            # Image plot 
-            ax_img = fig.add_axes([0.02, 0.35, 0.65, 0.6])  # Adjusted position and size
-            img = ax_img.imshow(data, cmap='gray', origin='lower', vmin=min_val, vmax=max_val)
-            ax_img.set_title(f'Image of FITS File: {os.path.basename(fits_file)}')
-            ax_img.set_xlabel('X Pixel')
-            ax_img.set_ylabel('Y Pixel')
+            # World Coordinate System (WCS)
+            w = WCS(header)
+
+            # Variables to track coordinate system
+            is_ra_dec = [False]
+
+            # Create axes for pixel coordinates
+            ax_img_pix = fig.add_axes([0.02, 0.35, 0.65, 0.6])
+            img_pix = ax_img_pix.imshow(data, cmap='gray', origin='lower', vmin=min_val, vmax=max_val)
+            ax_img_pix.set_title(f'Image of FITS File: {os.path.basename(fits_file)}')
+            ax_img_pix.set_xlabel('X Pixel')
+            ax_img_pix.set_ylabel('Y Pixel')
+
+            # Create axes for WCS (RA/DEC) coordinates
+            ax_img_wcs = fig.add_axes([0.02, 0.35, 0.65, 0.6], projection=w)
+            img_wcs = ax_img_wcs.imshow(data, cmap='gray', origin='lower', vmin=min_val, vmax=max_val)
+            ax_img_wcs.set_title(f'Image of FITS File: {os.path.basename(fits_file)}')
+            ax_img_wcs.set_xlabel('RA (deg)')
+            ax_img_wcs.set_ylabel('DEC (deg)')
+            ax_img_wcs.set_visible(False)  # Hide WCS axes initially
+
+            # Initialize current axes and image
+            current_ax = [ax_img_pix]
+            current_img = [img_pix]
 
             # Hover line for histogram
             hover_line = None
 
-            # Histogram (smaller, below the image, 1:5 height ratio)
-            ax_hist = fig.add_axes([0.05, 0.15, 0.65, 0.1])  # Adjusted position and size
+            # Histogram
+            ax_hist = fig.add_axes([0.05, 0.15, 0.65, 0.1])
             n, bins, patches = ax_hist.hist(data.flatten(), bins=1000, color='blue', alpha=0.5)
-            ax_hist.set_yscale('linear')  # Start with linear scale
+            ax_hist.set_yscale('linear')
             ax_hist.set_title('Histogram of Pixel Values')
             ax_hist.set_xlabel('Pixel Value')
             ax_hist.set_ylabel('Count')
 
-            # Add vertical line for current pixel value (red bar on histogram)
+            # Current pixel value
             hover_line = ax_hist.axvline(x=0, color='red', linestyle='--', visible=False)
 
-            # Stats box (to the right of the image, including current pixel info)
+            # info box
             stats_box = fig.text(0.65, 0.7, '', fontsize=12, bbox=dict(facecolor='white', alpha=0.5))
 
             # Variables to track dragging state for panning
             dragging = [False]
-            is_ra_dec = [False]
             zoom_level = [1.0]
 
             # Thread for RA/DEC calculation
             hover_thread = [None]
 
-            # Hover functionality, including current pixel info (X,Y or RA/DEC)
+            # Update statistics box
             def update_stats_box(x, y, pixel_value=None):
                 stats_text = (f'Total Pixels: {total_pixels:.2f} MP\n'
                               f'Mean: {mean_val:.2f}\n'
@@ -97,20 +108,19 @@ def show_fits_info(fits_file):
                               f'Standard Deviation: {std_dev:.2f}\n'
                               f'Min: {min_val:.2f}\n'
                               f'Max: {max_val:.2f}')
-
+                
                 if pixel_value is not None:
-                    if is_ra_dec[0] and has_wcs:
-                        # Calculate RA/DEC from pixel coordinates using WCS info in header
-                        ra_dec = w.pixel_to_world(x, y)
-                        ra = ra_dec.ra.degree  # RA in degrees
-                        dec = ra_dec.dec.degree  # DEC in degrees
+                    if is_ra_dec[0]:
+                        # Already in RA/DEC
+                        ra = x
+                        dec = y
 
                         # Convert RA from degrees to hours
                         skycoord = SkyCoord(ra=ra * u.deg, dec=dec * u.deg)
                         ra_hours = skycoord.ra.hms
 
                         # Update the stats text with RA in both degrees and hours, and DEC in degrees
-                        stats_text += (f'\n\nCurrent Pixel (RA, DEC):\n'
+                        stats_text += (f'\n\nCurrent Position (RA, DEC):\n'
                                        f'RA: {ra:.6f}° ({int(ra_hours.h):02d}h {int(ra_hours.m):02d}m {ra_hours.s:.2f}s)\n'
                                        f'DEC: {dec:.6f}°\n'
                                        f'Value: {pixel_value}')
@@ -119,9 +129,26 @@ def show_fits_info(fits_file):
 
                 stats_box.set_text(stats_text)
 
+            # Hover Functionality
             def on_hover(event):
-                if not dragging[0] and event.inaxes == ax_img:
-                    x, y = int(event.xdata), int(event.ydata)
+                if not dragging[0] and event.inaxes == current_ax[0]:
+                    xdata = event.xdata
+                    ydata = event.ydata
+
+                    if xdata is None or ydata is None:
+                        return  # Ignore if outside the plot area
+
+                    if is_ra_dec[0]:
+                        # In WCS coordinates
+                        sky_coord = SkyCoord(xdata * u.deg, ydata * u.deg, frame='icrs')
+                        x, y = w.world_to_pixel(sky_coord)
+                        x = int(x)
+                        y = int(y)
+                        ra = xdata
+                        dec = ydata
+                    else:
+                        x = int(xdata)
+                        y = int(ydata)
 
                     if 0 <= x < data.shape[1] and 0 <= y < data.shape[0]:
                         pixel_value = data[y, x]
@@ -130,8 +157,11 @@ def show_fits_info(fits_file):
                         if hover_thread[0] is not None and hover_thread[0].is_alive():
                             hover_thread[0].join()
 
-                        # Start a new thread for RA/DEC calculation
-                        hover_thread[0] = threading.Thread(target=update_stats_box, args=(x, y, pixel_value))
+                        # Start a new thread for stats box update
+                        if is_ra_dec[0]:
+                            hover_thread[0] = threading.Thread(target=update_stats_box, args=(ra, dec, pixel_value))
+                        else:
+                            hover_thread[0] = threading.Thread(target=update_stats_box, args=(x, y, pixel_value))
                         hover_thread[0].start()
 
                         # Update the red bar position on the histogram
@@ -145,7 +175,7 @@ def show_fits_info(fits_file):
 
             # Panning functionality
             def on_press(event):
-                if event.inaxes == ax_img and event.button == 1:  # Left mouse button for dragging
+                if event.inaxes == current_ax[0] and event.button == 1:  # Left mouse button for dragging
                     dragging[0] = True
                     on_press.lastx, on_press.lasty = event.xdata, event.ydata
 
@@ -153,53 +183,54 @@ def show_fits_info(fits_file):
                 dragging[0] = False  # Stop dragging
 
             def on_drag(event):
-                if dragging[0] and event.inaxes == ax_img:
+                if dragging[0] and event.inaxes == current_ax[0]:
                     dx = event.xdata - on_press.lastx
                     dy = event.ydata - on_press.lasty
-                    cur_xlim = ax_img.get_xlim()
-                    cur_ylim = ax_img.get_ylim()
-                    ax_img.set_xlim([cur_xlim[0] - dx, cur_xlim[1] - dx])
-                    ax_img.set_ylim([cur_ylim[0] - dy, cur_ylim[1] - dy])
+                    cur_xlim = current_ax[0].get_xlim()
+                    cur_ylim = current_ax[0].get_ylim()
+                    current_ax[0].set_xlim([cur_xlim[0] - dx, cur_xlim[1] - dx])
+                    current_ax[0].set_ylim([cur_ylim[0] - dy, cur_ylim[1] - dy])
                     fig.canvas.draw_idle()
 
             # Zoom functionality
             def on_zoom(event):
-                if event.inaxes == ax_img:
-                    if event.button == 'up':
-                        scale_factor = 1.1
-                    elif event.button == 'down':
-                        scale_factor = 0.9
-                    else:
-                        scale_factor = 1.0  # No zoom
+                if event.inaxes == current_ax[0]:
+                    scale_factor = 1.1 if event.button == 'up' else 0.9
 
-                    if scale_factor != 1.0:
-                        cur_xlim = ax_img.get_xlim()
-                        cur_ylim = ax_img.get_ylim()
+                    cur_xlim = current_ax[0].get_xlim()
+                    cur_ylim = current_ax[0].get_ylim()
 
-                        xdata = event.xdata
-                        ydata = event.ydata
+                    xdata = event.xdata
+                    ydata = event.ydata
 
-                        new_width = (cur_xlim[1] - cur_xlim[0]) * scale_factor
-                        new_height = (cur_ylim[1] - cur_ylim[0]) * scale_factor
+                    new_width = (cur_xlim[1] - cur_xlim[0]) * scale_factor
+                    new_height = (cur_ylim[1] - cur_ylim[0]) * scale_factor
 
-                        relx = (cur_xlim[1] - xdata) / (cur_xlim[1] - cur_xlim[0])
-                        rely = (cur_ylim[1] - ydata) / (cur_ylim[1] - cur_ylim[0])
+                    relx = (cur_xlim[1] - xdata) / (cur_xlim[1] - cur_xlim[0])
+                    rely = (cur_ylim[1] - ydata) / (cur_ylim[1] - cur_ylim[0])
 
-                        ax_img.set_xlim([xdata - new_width * (1 - relx), xdata + new_width * (relx)])
-                        ax_img.set_ylim([ydata - new_height * (1 - rely), ydata + new_height * (rely)])
+                    current_ax[0].set_xlim([xdata - new_width * (1 - relx), xdata + new_width * (relx)])
+                    current_ax[0].set_ylim([ydata - new_height * (1 - rely), ydata + new_height * (rely)])
 
-                        fig.canvas.draw_idle()
+                    fig.canvas.draw_idle()
 
             # Reset zoom button
             ax_reset = plt.axes([0.75, 0.05, 0.15, 0.05])  # Adjusted position
             reset_button = Button(ax_reset, 'Reset Zoom')
 
-            original_xlim = ax_img.get_xlim()
-            original_ylim = ax_img.get_ylim()
+            # Store original limits for both axes
+            original_xlim_pix = ax_img_pix.get_xlim()
+            original_ylim_pix = ax_img_pix.get_ylim()
+            original_xlim_wcs = ax_img_wcs.get_xlim()
+            original_ylim_wcs = ax_img_wcs.get_ylim()
 
             def reset_zoom(event):
-                ax_img.set_xlim(original_xlim)
-                ax_img.set_ylim(original_ylim)
+                if is_ra_dec[0]:
+                    current_ax[0].set_xlim(original_xlim_wcs)
+                    current_ax[0].set_ylim(original_ylim_wcs)
+                else:
+                    current_ax[0].set_xlim(original_xlim_pix)
+                    current_ax[0].set_ylim(original_ylim_pix)
                 fig.canvas.draw_idle()
 
             reset_button.on_clicked(reset_zoom)
@@ -210,9 +241,10 @@ def show_fits_info(fits_file):
             fig.canvas.mpl_connect('motion_notify_event', on_drag)
             fig.canvas.mpl_connect('scroll_event', on_zoom)
 
-            # Toggle display of circles around stars (if positions are available)
+            # Toggle display of circles around stars
             if star_positions:
-                circles = []
+                circles_pix = []
+                circles_wcs = []
                 are_stars_displayed = [False]
                 ax_star_toggle = plt.axes([0.75, 0.25, 0.15, 0.05])
                 star_toggle_button = Button(ax_star_toggle, 'Stars: Off')
@@ -221,15 +253,27 @@ def show_fits_info(fits_file):
                     if not are_stars_displayed[0]:
                         # Display circles around stars
                         for (x, y) in star_positions:
-                            circle = plt.Circle((x, y), 10, color='red', fill=False, lw=1)
-                            ax_img.add_artist(circle)
-                            circles.append(circle)
+                            # For pixel axes
+                            circle_pix = plt.Circle((x, y), 10, color='red', fill=False, lw=1)
+                            ax_img_pix.add_artist(circle_pix)
+                            circles_pix.append(circle_pix)
+
+                            # For WCS axes
+                            if is_ra_dec[0]:
+                                sky_coord = w.pixel_to_world(x, y)
+                                circle_wcs = plt.Circle((sky_coord.ra.deg, sky_coord.dec.deg), 0.01, transform=ax_img_wcs.get_transform('fk5'), color='red', fill=False, lw=1)
+                                ax_img_wcs.add_artist(circle_wcs)
+                                circles_wcs.append(circle_wcs)
+
                         star_toggle_button.label.set_text('Stars: On')
                     else:
                         # Remove circles
-                        for circle in circles:
+                        for circle in circles_pix:
                             circle.remove()
-                        circles.clear()
+                        circles_pix.clear()
+                        for circle in circles_wcs:
+                            circle.remove()
+                        circles_wcs.clear()
                         star_toggle_button.label.set_text('Stars: Off')
 
                     are_stars_displayed[0] = not are_stars_displayed[0]
@@ -239,40 +283,42 @@ def show_fits_info(fits_file):
             else:
                 print("No star positions available for this file.")
 
-            # RA/DEC toggle button (only add if WCS is present)
-            if has_wcs:
-                ax_coord_toggle = plt.axes([0.75, 0.3, 0.15, 0.05])  # Adjusted position
-                coord_toggle_button = Button(ax_coord_toggle, 'Coord: X,Y')
+            # Add RA/DEC toggle button
+            ax_coord_toggle = plt.axes([0.75, 0.3, 0.15, 0.05])
+            coord_toggle_button = Button(ax_coord_toggle, 'Coord: X,Y')
 
-                def toggle_coords(event):
-                    if not is_ra_dec[0]:
-                        ax_img.set_xlabel('RA (deg)')
-                        ax_img.set_ylabel('DEC (deg)')
-                        coord_toggle_button.label.set_text('Coord: RA/DEC')
-                    else:
-                        ax_img.set_xlabel('X Pixel')
-                        ax_img.set_ylabel('Y Pixel')
-                        coord_toggle_button.label.set_text('Coord: X,Y')
+            def toggle_coords(event):
+                if not is_ra_dec[0]:
+                    # Switch to RA/DEC axes
+                    ax_img_pix.set_visible(False)
+                    ax_img_wcs.set_visible(True)
+                    current_ax[0] = ax_img_wcs
+                    current_img[0] = img_wcs
+                    coord_toggle_button.label.set_text('Coord: RA/DEC')
+                else:
+                    # Switch to pixel axes
+                    ax_img_pix.set_visible(True)
+                    ax_img_wcs.set_visible(False)
+                    current_ax[0] = ax_img_pix
+                    current_img[0] = img_pix
+                    coord_toggle_button.label.set_text('Coord: X,Y')
+                is_ra_dec[0] = not is_ra_dec[0]
+                fig.canvas.draw_idle()
 
-                    is_ra_dec[0] = not is_ra_dec[0]
-                    fig.canvas.draw_idle()
-
-                coord_toggle_button.on_clicked(toggle_coords)
-            else:
-                print("No WCS information available; RA/DEC toggle disabled.")
+            coord_toggle_button.on_clicked(toggle_coords)
 
             # Auto-Stretch toggle button
-            ax_toggle = plt.axes([0.75, 0.2, 0.15, 0.05])  # Adjusted position
+            ax_toggle = plt.axes([0.75, 0.2, 0.15, 0.05])
             toggle_button = Button(ax_toggle, 'Auto Stretch: Off')
 
             is_auto_stretched = [False]
 
             def toggle_display(event):
                 if not is_auto_stretched[0]:
-                    img.set_clim(lower_auto_percentile, upper_auto_percentile)
+                    current_img[0].set_clim(lower_auto_percentile, upper_auto_percentile)
                     toggle_button.label.set_text('Auto Stretch: On')
                 else:
-                    img.set_clim(min_val, max_val)
+                    current_img[0].set_clim(min_val, max_val)
                     toggle_button.label.set_text('Auto Stretch: Off')
 
                 is_auto_stretched[0] = not is_auto_stretched[0]
@@ -281,7 +327,7 @@ def show_fits_info(fits_file):
             toggle_button.on_clicked(toggle_display)
 
             # Log histogram toggle button
-            ax_log_toggle = plt.axes([0.75, 0.1, 0.15, 0.05])  # Adjusted position
+            ax_log_toggle = plt.axes([0.75, 0.1, 0.15, 0.05])
             log_toggle_button = Button(ax_log_toggle, 'Log Hist: Off')
 
             is_log = [False]
@@ -304,6 +350,3 @@ def show_fits_info(fits_file):
 
     except Exception as e:
         print(f"Error processing {fits_file}: {e}")
-
-# Example usage:
-# show_fits_info('example.fits')

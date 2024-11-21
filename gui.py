@@ -5,7 +5,6 @@ from tkinter import filedialog, messagebox
 from plots import show_fits_info
 from fits_processor import process_light_images
 
-# pylint: disable=broad-exception-caught
 
 def run_gui():
     # Runs GUI
@@ -16,16 +15,16 @@ def run_gui():
     root.focus_force()
 
     # Variables to hold toggle states
-    use_flats_var = tk.BooleanVar(value=True)
-    use_darks_var = tk.BooleanVar(value=True)
-    use_biases_var = tk.BooleanVar(value=True)
-    stack_var = tk.BooleanVar(value=True)
+    use_flats_var = tk.BooleanVar(value=True) # Applies Flat Frames During Calibration
+    use_darks_var = tk.BooleanVar(value=True) # Applies Dark Frames During Calibration
+    use_biases_var = tk.BooleanVar(value=True) # Applies Bias Frames During Calibration
+    stack_var = tk.BooleanVar(value=True) # Stacks after Calibration
 
     def start_processing():
-        # Read base_folder from entry widget
-        base_folder = base_folder_entry.get()
+        # Processing Function
+        base_folder = base_folder_entry.get() # Gets folder to use.
 
-        # Create a unique output folder name using the smallest number not already used
+        # Create a unique output folder name
         output_number = 1
         while os.path.exists(os.path.join(base_folder, f"Output {output_number}")):
             output_number += 1
@@ -35,8 +34,9 @@ def run_gui():
         try:
             start_time = time.time()  # Record the start time
 
-            # Start the main processing functionC
-            total_files = process_light_images(
+            # Main processing function
+            
+            process_light_images(
                 base_folder,
                 output_folder,
                 use_flats_var.get(),
@@ -50,11 +50,10 @@ def run_gui():
 
             # Print processing results to the console
             print("=======\nProcessing complete!\n")
-            print(f"Total Files Processed: {total_files}")
             print(f"Output Saved To: {output_folder}")
             print(f"Time Taken: {processing_time:.2f} seconds.")
 
-        except Exception as e:
+        except Exception as e: # In case of error
             messagebox.showerror("Error", str(e))
 
     # Folder selection
@@ -110,4 +109,4 @@ def run_gui():
 
     root.mainloop()
 
-run_gui()
+run_gui() # Run Code
