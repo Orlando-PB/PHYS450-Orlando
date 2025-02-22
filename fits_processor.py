@@ -1,4 +1,5 @@
 # fits_processor.py
+
 import os
 import json
 import numpy as np
@@ -7,15 +8,24 @@ import astrometry
 from utils import sort_files_into_subfolders
 from source_extraction import extract_sources
 import concurrent.futures
+import threading  # NEW: We'll need threading for semaphores
 
 # NEW: import the calibration function
 from photometric_calibration import perform_photometric_calibration
 
+# -----------------------------------------------------------------------
+# Concurrency-limiting semaphores
+# Change these values as desired
+ASTROMETRY_SEMAPHORE = threading.Semaphore(5)   # At most 5 astrometry solves in parallel
+PHOTOMETRY_SEMAPHORE = threading.Semaphore(1)   # Photometry can run only on 1 file at a time
+# -----------------------------------------------------------------------
+
+
 def process_light_images(base_folder, output_folder,
                          use_flats=True, use_darks=True, use_biases=True,
                          do_astrometry=True, astrometry_api_key=None,
-                         progress_callback=None,  # New!
-                         max_workers=3):          # Control concurrency
+                         progress_callback=None,
+                         max_workers=3):
     """
     Process light images: bias, dark, flat calibration. Optionally run astrometry, source extraction,
     and photometric calibration. Reports progress via a progress_callback function if provided.
@@ -37,20 +47,27 @@ def process_light_images(base_folder, output_folder,
 
     master_dark = master_bias = None
 
+    # -------------------------------------------------------------------
+    # 1) Create Master Bias
+    # -------------------------------------------------------------------
     if use_biases and bias_count > 0:
         _report(f"Bias: 0/{bias_count}", category="bias", current=0, total=bias_count, done=False)
         try:
             create_master_bias(os.path.join(base_folder, 'Bias'), calibration_folder,
-                               progress_callback=lambda i: _report(f"Bias: {i}/{bias_count}", 
+                               progress_callback=lambda i: _report(f"Bias: {i}/{bias_count}",
                                                                    category="bias", current=i, total=bias_count))
         except Exception as e:
             _report(f"Error creating master bias: {e}", color="red")
         else:
             master_bias = load_master_frame(calibration_folder, "master_bias")
-            _report(f"Bias: {bias_count}/{bias_count} (done)", category="bias", current=bias_count, total=bias_count, done=True, color="green")
+            _report(f"Bias: {bias_count}/{bias_count} (done)", category="bias",
+                    current=bias_count, total=bias_count, done=True, color="green")
     else:
         _report(f"Bias: 0/0 (done)", category="bias", current=0, total=0, done=True, color="green")
 
+    # -------------------------------------------------------------------
+    # 2) Create Master Dark
+    # -------------------------------------------------------------------
     if use_darks and dark_count > 0:
         _report(f"Darks: 0/{dark_count}", category="dark", current=0, total=dark_count, done=False)
         try:
@@ -61,10 +78,14 @@ def process_light_images(base_folder, output_folder,
             _report(f"Error creating master dark: {e}", color="red")
         else:
             master_dark = load_master_frame(calibration_folder, "master_dark")
-            _report(f"Darks: {dark_count}/{dark_count} (done)", category="dark", current=dark_count, total=dark_count, done=True, color="green")
+            _report(f"Darks: {dark_count}/{dark_count} (done)", category="dark",
+                    current=dark_count, total=dark_count, done=True, color="green")
     else:
         _report(f"Darks: 0/0 (done)", category="dark", current=0, total=0, done=True, color="green")
 
+    # -------------------------------------------------------------------
+    # 3) Create Master Flats
+    # -------------------------------------------------------------------
     if use_flats and flat_count > 0:
         _report(f"Flats: 0/{flat_count}", category="flat", current=0, total=flat_count, done=False)
         try:
@@ -74,10 +95,14 @@ def process_light_images(base_folder, output_folder,
         except Exception as e:
             _report(f"Error creating master flats: {e}", color="red")
         else:
-            _report(f"Flats: {flat_count}/{flat_count} (done)", category="flat", current=flat_count, total=flat_count, done=True, color="green")
+            _report(f"Flats: {flat_count}/{flat_count} (done)", category="flat",
+                    current=flat_count, total=flat_count, done=True, color="green")
     else:
         _report(f"Flats: 0/0 (done)", category="flat", current=0, total=0, done=True, color="green")
 
+    # -------------------------------------------------------------------
+    # 4) Setup astrometry if requested
+    # -------------------------------------------------------------------
     astrometry_session = None
     if do_astrometry:
         try:
@@ -88,6 +113,9 @@ def process_light_images(base_folder, output_folder,
             _report(f"Error setting up astrometry: {e}", color="red")
             astrometry_session = None
 
+    # -------------------------------------------------------------------
+    # 5) Prepare to process Light frames
+    # -------------------------------------------------------------------
     light_folder = os.path.join(base_folder, 'Lights')
     calibrated_folder = os.path.join(output_folder, 'calibrated')
     os.makedirs(calibrated_folder, exist_ok=True)
@@ -102,9 +130,21 @@ def process_light_images(base_folder, output_folder,
     }
 
     def calibrate_and_annotate(light_path, filter_name):
+        """
+        Processes a single light frame:
+          1) Subtracts master bias, master dark
+          2) Divides by master flat
+          3) Saves calibrated .fit
+          4) Runs astrometry (limited to 5 concurrent)
+          5) Source extraction
+          6) Photometric calibration (limited to 1 at a time, uses all threads internally)
+        """
         nonlocal master_bias, master_dark
         _report(f"Processing light: {os.path.basename(light_path)}")
 
+        # -------------------
+        # (A) Calibration
+        # -------------------
         with fits.open(light_path) as hdul:
             light_data = hdul[0].data.astype(np.float32)
             header = hdul[0].header
@@ -120,27 +160,41 @@ def process_light_images(base_folder, output_folder,
         mf_path = os.path.join(calibration_folder, f"master_flat_{filter_name}.fit")
         if os.path.exists(mf_path):
             mf = load_master_frame(calibration_folder, f"master_flat_{filter_name}")
+            # Avoid division by zero
+            mf[mf == 0] = 1.0
             light_data /= mf
 
+        # Save calibrated
         out_dir = os.path.join(calibrated_folder, filter_name)
         os.makedirs(out_dir, exist_ok=True)
         out_name = os.path.join(out_dir, f"calibrated_{os.path.basename(light_path)}")
         fits.writeto(out_name, light_data, header, overwrite=True)
         _report(f"Calibrated frame saved: {os.path.basename(out_name)}")
 
+        # -------------------
+        # (B) Astrometry
+        # -------------------
         if do_astrometry and astrometry_session:
-            try:
-                _report(f"Running astrometry on {os.path.basename(out_name)}")
-                astrometry_result = astrometry.process_image(out_name, astrometry_session)
-                _report(f"Astrometry success: RA={astrometry_result['Right Ascension']}, DEC={astrometry_result['Declination']}")
-            except Exception as e:
-                _report(f"Error during astrometry for {out_name}: {e}", color="red")
+            with ASTROMETRY_SEMAPHORE:  # Limit concurrency to 5
+                try:
+                    _report(f"Running astrometry on {os.path.basename(out_name)}")
+                    astrometry_result = astrometry.process_image(out_name, astrometry_session)
+                    _report(
+                        f"Astrometry success: RA={astrometry_result.get('Right Ascension')}, "
+                        f"DEC={astrometry_result.get('Declination')}"
+                    )
+                except Exception as e:
+                    _report(f"Error during astrometry for {out_name}: {e}", color="red")
 
+        # -------------------
+        # (C) Source Extraction & Photometric Calibration
+        # -------------------
         try:
             _report(f"Source extraction on {os.path.basename(out_name)}")
             sources = extract_sources(out_name)
             base_name = os.path.splitext(os.path.basename(out_name))[0]
             json_filename = os.path.join(out_dir, f"{base_name}_astrometry_solution.json")
+
             if os.path.exists(json_filename):
                 with open(json_filename, "r") as infile:
                     data = json.load(infile)
@@ -152,20 +206,27 @@ def process_light_images(base_folder, output_folder,
                 json.dump(data, outfile, indent=4)
             _report(f"Updated JSON with {len(sources)} sources")
 
-            # 8) Photometric Calibration: pass the max_workers value from the main GUI.
+            # Photometric calibration: uses all threads, so ensure only 1 at a time
             gaia_column = gaia_filter_map.get(filter_name, "phot_g_mean_mag")
-            _report(f"Running photometric calibration (Gaia column: {gaia_column})")
-            perform_photometric_calibration(json_filename, gaia_filter_column=gaia_column, max_workers=max_workers)
+            with PHOTOMETRY_SEMAPHORE:
+                _report(f"Running photometric calibration (Gaia column: {gaia_column})")
+                perform_photometric_calibration(json_filename, gaia_filter_column=gaia_column, max_workers=max_workers)
 
         except Exception as e:
             _report(f"Error during source extraction or calibration: {e}", color="red")
 
+    # -------------------------------------------------------------------
+    # 6) Collect all Light frames into tasks
+    # -------------------------------------------------------------------
     light_tasks = []
     for filter_name, files in sorted_categories["Light"].items():
         for f in files:
             light_path = os.path.join(light_folder, filter_name, f)
             light_tasks.append((light_path, filter_name))
 
+    # -------------------------------------------------------------------
+    # 7) Process Light frames in parallel
+    # -------------------------------------------------------------------
     _report(f"Lights: 0/{light_count}", category="light", current=0, total=light_count, done=False)
     futures = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -183,6 +244,9 @@ def process_light_images(base_folder, output_folder,
     _report("All processing complete!", color="green")
 
 
+# -----------------------------------------------------------------------
+# Helper functions
+# -----------------------------------------------------------------------
 def create_master_bias(bias_folder, calibration_folder, progress_callback=None):
     bias_files = [f for f in os.listdir(bias_folder) if f.lower().endswith(('.fit', '.fits'))]
     if not bias_files:
@@ -200,6 +264,7 @@ def create_master_bias(bias_folder, calibration_folder, progress_callback=None):
     master_bias = calculate_median_frame(bias_frames)
     master_bias_path = os.path.join(calibration_folder, 'master_bias.fit')
     fits.writeto(master_bias_path, master_bias, overwrite=True)
+
 
 def create_master_dark(dark_folder, calibration_folder, master_bias=None, progress_callback=None):
     dark_files = [f for f in os.listdir(dark_folder) if f.lower().endswith(('.fit', '.fits'))]
@@ -222,6 +287,7 @@ def create_master_dark(dark_folder, calibration_folder, master_bias=None, progre
     master_dark = np.clip(master_dark, 0, None)
     master_dark_path = os.path.join(calibration_folder, 'master_dark.fit')
     fits.writeto(master_dark_path, master_dark, overwrite=True)
+
 
 def create_master_flats_for_filters(flat_folder, calibration_folder, master_bias=None, progress_callback=None):
     filters = [f for f in os.listdir(flat_folder) if os.path.isdir(os.path.join(flat_folder, f))]
@@ -250,6 +316,7 @@ def create_master_flats_for_filters(flat_folder, calibration_folder, master_bias
         master_flat_path = os.path.join(calibration_folder, f"master_flat_{filter_name}.fit")
         fits.writeto(master_flat_path, master_flat, overwrite=True)
 
+
 def load_master_frame(folder, master_filename):
     path = os.path.join(folder, f"{master_filename}.fit")
     if not os.path.exists(path):
@@ -258,9 +325,11 @@ def load_master_frame(folder, master_filename):
         data = hdul[0].data
     return data
 
+
 def calculate_median_frame(frames):
     stacked = np.stack(frames, axis=0)
     return np.median(stacked, axis=0)
+
 
 def normalize_frame(frame):
     mean_val = np.mean(frame)

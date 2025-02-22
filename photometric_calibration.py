@@ -12,11 +12,13 @@ import concurrent.futures
 # -------------------------------------------
 #  Configurable parameters
 # -------------------------------------------
-SEARCH_RADIUS = 10 * u.arcsec     # Radius for Gaia cone search
-DEFAULT_MAX_WORKERS   = 10        # Fallback number of threads if not provided
-MAX_TOTAL_MATCHES = 25            # Limit how many sources to use for calibration
-SIGMA_THRESHOLD   = 2.0           # Sigma threshold for iterative clipping
-MAX_ITER          = 3             # Max iterations for sigma clipping
+CHUNK_SIZE          = 20          # Process Gaia queries in groups of N
+GAIA_QUERY_TIMEOUT  = 10          # Seconds to wait before giving up on each query
+SEARCH_RADIUS       = 10 * u.arcsec     # Radius for Gaia cone search
+DEFAULT_MAX_WORKERS = 10                # Fallback number of threads if not provided
+MAX_TOTAL_MATCHES   = 25               # Limit how many sources to use for calibration
+SIGMA_THRESHOLD     = 2.0              # Sigma threshold for iterative clipping
+MAX_ITER            = 3                # Max iterations for sigma clipping
 
 
 # ----------------------------------------------------------------------
@@ -60,8 +62,12 @@ def perform_photometric_calibration(json_path, gaia_filter_column="phot_g_mean_m
     random.shuffle(sources_list)
     subset = sources_list[:MAX_TOTAL_MATCHES]
 
-    # 2) Run Gaia queries in parallel
-    matches = run_gaia_queries(subset, gaia_filter_column=gaia_filter_column, max_workers=max_workers)
+    # 2) Run Gaia queries in chunks (groups of CHUNK_SIZE) with 10s timeout
+    matches = run_gaia_queries_in_chunks(subset,
+                                         gaia_filter_column=gaia_filter_column,
+                                         chunk_size=CHUNK_SIZE,
+                                         gaia_timeout=GAIA_QUERY_TIMEOUT,
+                                         max_workers=max_workers)
 
     if not matches:
         print("[Calibration] No valid Gaia matches to build calibration. Aborting.")
@@ -110,64 +116,104 @@ def perform_photometric_calibration(json_path, gaia_filter_column="phot_g_mean_m
     return (slope, intercept)
 
 
-# -------------------------------------------
-#  Gaia Query
-# -------------------------------------------
-def run_gaia_queries(sources_list, gaia_filter_column, max_workers=None):
+# ----------------------------------------------------------------------
+#  Gaia Queries in Chunks
+# ----------------------------------------------------------------------
+def run_gaia_queries_in_chunks(sources_list, gaia_filter_column,
+                               chunk_size=CHUNK_SIZE,
+                               gaia_timeout=GAIA_QUERY_TIMEOUT,
+                               max_workers=None):
     """
-    Queries Gaia for each source in `sources_list`, returning only those
-    that yield a valid `gaia_filter_column` magnitude. We also keep the
-    daofind_mag from the source for the final fit.
+    Breaks the list of sources into chunks of size `chunk_size`,
+    and queries each chunk in parallel. Each source within that
+    chunk is still handled by a local pool of threads.
+
+    If a query takes longer than `gaia_timeout` seconds, it is
+    skipped. Returns a list of successfully matched sources.
 
     Parameters
     ----------
-    sources_list : list
-        List of source dictionaries.
+    sources_list : list of dict
+        Each dict has at least 'ra','dec','daofind_mag'.
     gaia_filter_column : str
-        Gaia column to query.
-    max_workers : int, optional
-        Number of worker threads to use.
+        Column name, e.g. 'phot_g_mean_mag', etc.
+    chunk_size : int
+        How many sources to query in one chunk.
+    gaia_timeout : int (seconds)
+        Time to wait for a single query to finish.
+    max_workers : int
+        Number of threads for the chunk's queries.
 
     Returns
     -------
-    List of dict with keys: {"daofind_mag", "gaia_mag"}.
+    matches : list of dicts with keys {"daofind_mag", "gaia_mag"}.
     """
-    matches = []
+    # Set the global astroquery timeout
+    Gaia.TIMEOUT = gaia_timeout
+
+    total_sources = len(sources_list)
+    all_matches = []
     start_time = time.time()
-    completed_count = 0
-    total_futures = len(sources_list)
+    global_completed = 0  # how many sources have been processed so far
+
+    # If no max_workers given, use our default
     workers = max_workers if max_workers is not None else DEFAULT_MAX_WORKERS
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = {executor.submit(query_single_source, src, gaia_filter_column): src
-                   for src in sources_list}
+    # Iterate over chunks of the source list
+    for i in range(0, total_sources, chunk_size):
+        chunk = sources_list[i:i+chunk_size]
 
-        for future in concurrent.futures.as_completed(futures):
-            completed_count += 1
-            result = future.result()
-            if result is not None:
-                matches.append(result)
+        # Submit tasks for this chunk using a local thread pool
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+            future_to_src = {
+                executor.submit(query_single_source, src, gaia_filter_column): src
+                for src in chunk
+            }
 
-            if completed_count % 5 == 0 or completed_count == total_futures:
-                elapsed = time.time() - start_time
-                avg_time = elapsed / completed_count
-                est_total = total_futures * avg_time
-                remaining = est_total - elapsed
-                print(f"[Gaia Query] Completed {completed_count}/{total_futures}. "
-                      f"Est. time remaining: {remaining:.1f}s. Matches: {len(matches)}")
-    return matches
+            # Collect results as they complete
+            for future in concurrent.futures.as_completed(future_to_src):
+                global_completed += 1
+                src = future_to_src[future]
+                try:
+                    # Attempt to retrieve result with the given timeout
+                    result = future.result(timeout=gaia_timeout)
+                except concurrent.futures.TimeoutError:
+                    # The query didn't return in time; skip
+                    result = None
+                except Exception:
+                    result = None
+
+                if result is not None:
+                    all_matches.append(result)
+
+                # Print partial progress every 5 completions or at the end of chunk
+                if (global_completed % 5 == 0) or (global_completed == total_sources):
+                    elapsed = time.time() - start_time
+                    avg_time = elapsed / global_completed
+                    est_total = total_sources * avg_time
+                    remaining = est_total - elapsed
+                    print(f"[Gaia Query] Completed {global_completed}/{total_sources}. "
+                          f"Est. time remaining: {remaining:.1f}s. Matches: {len(all_matches)}")
+
+    return all_matches
 
 
+# ----------------------------------------------------------------------
+#  Single-Source Gaia Query
+# ----------------------------------------------------------------------
 def query_single_source(source, gaia_filter_column):
     """
-    Tries to query Gaia for a single source. If successful, returns
-    {"daofind_mag", "gaia_mag"}. If not, returns None.
+    Performs a cone search for a single source with the given RA, Dec,
+    then returns {"daofind_mag", "gaia_mag"} if found, else None.
+
+    This function relies on the global Gaia.TIMEOUT. If the request
+    takes longer than that, astroquery should raise an exception (or
+    we might catch it separately in the caller).
     """
     try:
         ra = source.get("ra")
         dec = source.get("dec")
         dao_mag = source.get("daofind_mag")
-
         if ra is None or dec is None or dao_mag is None:
             return None
 
@@ -178,6 +224,7 @@ def query_single_source(source, gaia_filter_column):
         if len(results) == 0 or (gaia_filter_column not in results.colnames):
             return None
 
+        # Sort by distance if possible
         if 'dist' in results.colnames:
             results.sort('dist')
         elif 'angular_distance' in results.colnames:
@@ -185,16 +232,13 @@ def query_single_source(source, gaia_filter_column):
 
         best = results[0]
         val = best[gaia_filter_column]
-
         if (val is np.ma.masked) or np.isnan(val):
             return None
 
-        return {
-            "daofind_mag": float(dao_mag),
-            "gaia_mag": float(val)
-        }
+        return {"daofind_mag": float(dao_mag), "gaia_mag": float(val)}
 
-    except Exception as e:
+    except Exception:
+        # Could log the exception if desired
         return None
 
 

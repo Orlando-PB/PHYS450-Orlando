@@ -65,7 +65,7 @@ def run_app():
     # New: Dropdown for selecting number of worker threads.
     # Compute default as 80% of available threads.
     cpu_count = os.cpu_count() or 1
-    default_workers = max(1, int(cpu_count * 0.8))
+    default_workers = min(4, int(cpu_count))
     thread_options = [str(i) for i in range(1, cpu_count + 1)]
     
     # Add label and combobox to proc_frame (row 5)

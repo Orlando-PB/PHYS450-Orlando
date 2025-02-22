@@ -229,15 +229,20 @@ class FITSViewer:
         found = None
         for src in self.detected_sources:
             src_disp = self.ax_image.transData.transform((src["xcentroid"], src["ycentroid"]))
-            dist = hypot(click_disp[0]-src_disp[0], click_disp[1]-src_disp[1])
+            dist = hypot(click_disp[0] - src_disp[0], click_disp[1] - src_disp[1])
             if dist < min_dist:
                 min_dist = dist
                 found = src
         if min_dist <= 15:  # only snap if within 15 screen pixels
-            src_coord = SkyCoord(ra=found["ra"]*u.deg, dec=found["dec"]*u.deg)
+            src_coord = SkyCoord(ra=found["ra"] * u.deg, dec=found["dec"] * u.deg)
+            # Use calibrated magnitude if available; otherwise fall back to flux.
+            if found.get("calibrated_mag") is not None:
+                mag_str = f"Mag: {found['calibrated_mag']:.2f}"
+            else:
+                mag_str = f"Flux: {found.get('flux', found.get('Flux', 0)):.2f}"
             src_text = (f"RA: {src_coord.ra.to_string(unit=u.hour, sep=':', pad=True, precision=2)}\n"
                         f"DEC: {src_coord.dec.to_string(sep=':', pad=True, alwayssign=True, precision=2)}\n"
-                        f"Flux: {found.get('flux', found.get('Flux', 0)):.2f}")
+                        f"{mag_str}")
             self.stats_labels["selected"].config(text=src_text)
             if self.selected_source_artist is not None:
                 self.selected_source_artist.remove()
@@ -248,6 +253,7 @@ class FITSViewer:
             )
             self.canvas.draw_idle()
         # Else, do nothing (retain current selection)
+
     
     def on_scroll(self, event):
         if event.inaxes != self.ax_image or event.xdata is None or event.ydata is None:
