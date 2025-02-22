@@ -8,7 +8,7 @@ import astrometry
 from utils import sort_files_into_subfolders
 from source_extraction import extract_sources
 import concurrent.futures
-import threading  # NEW: We'll need threading for semaphores
+import threading  # For semaphores
 
 # NEW: import the calibration function
 from photometric_calibration import perform_photometric_calibration
@@ -17,9 +17,8 @@ from photometric_calibration import perform_photometric_calibration
 # Concurrency-limiting semaphores
 # Change these values as desired
 ASTROMETRY_SEMAPHORE = threading.Semaphore(5)   # At most 5 astrometry solves in parallel
-PHOTOMETRY_SEMAPHORE = threading.Semaphore(1)   # Photometry can run only on 1 file at a time
+PHOTOMETRY_SEMAPHORE = threading.Semaphore(1)     # Photometry can run only on 1 file at a time
 # -----------------------------------------------------------------------
-
 
 def process_light_images(base_folder, output_folder,
                          use_flats=True, use_darks=True, use_biases=True,
@@ -34,6 +33,8 @@ def process_light_images(base_folder, output_folder,
     def _report(msg, **kwargs):
         if progress_callback:
             progress_callback(msg, **kwargs)
+        else:
+            print(msg)
 
     sorted_categories = sort_files_into_subfolders(base_folder)
 
@@ -164,7 +165,7 @@ def process_light_images(base_folder, output_folder,
             mf[mf == 0] = 1.0
             light_data /= mf
 
-        # Save calibrated
+        # Save calibrated image
         out_dir = os.path.join(calibrated_folder, filter_name)
         os.makedirs(out_dir, exist_ok=True)
         out_name = os.path.join(out_dir, f"calibrated_{os.path.basename(light_path)}")
@@ -178,6 +179,7 @@ def process_light_images(base_folder, output_folder,
             with ASTROMETRY_SEMAPHORE:  # Limit concurrency to 5
                 try:
                     _report(f"Running astrometry on {os.path.basename(out_name)}")
+                    # Call the improved astrometry function
                     astrometry_result = astrometry.process_image(out_name, astrometry_session)
                     _report(
                         f"Astrometry success: RA={astrometry_result.get('Right Ascension')}, "
@@ -206,7 +208,7 @@ def process_light_images(base_folder, output_folder,
                 json.dump(data, outfile, indent=4)
             _report(f"Updated JSON with {len(sources)} sources")
 
-            # Photometric calibration: uses all threads, so ensure only 1 at a time
+            # Photometric calibration: ensure only one instance at a time
             gaia_column = gaia_filter_map.get(filter_name, "phot_g_mean_mag")
             with PHOTOMETRY_SEMAPHORE:
                 _report(f"Running photometric calibration (Gaia column: {gaia_column})")
@@ -228,13 +230,17 @@ def process_light_images(base_folder, output_folder,
     # 7) Process Light frames in parallel
     # -------------------------------------------------------------------
     _report(f"Lights: 0/{light_count}", category="light", current=0, total=light_count, done=False)
+    processed_lights = 0
     futures = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         for (lp, fn) in light_tasks:
             futures.append(executor.submit(calibrate_and_annotate, lp, fn))
 
         for future in concurrent.futures.as_completed(futures):
-            _ = future.result()
+            try:
+                future.result()
+            except Exception as exc:
+                _report(f"Error in processing a light frame: {exc}", color="red")
             processed_lights += 1
             _report(f"Lights: {processed_lights}/{light_count}",
                     category="light", current=processed_lights, total=light_count, done=False)

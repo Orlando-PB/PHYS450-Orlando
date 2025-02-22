@@ -12,11 +12,11 @@ import concurrent.futures
 # -------------------------------------------
 #  Configurable parameters
 # -------------------------------------------
-CHUNK_SIZE          = 20          # Process Gaia queries in groups of N
+CHUNK_SIZE          = 25          # Process Gaia queries in groups of N
 GAIA_QUERY_TIMEOUT  = 10          # Seconds to wait before giving up on each query
 SEARCH_RADIUS       = 10 * u.arcsec     # Radius for Gaia cone search
-DEFAULT_MAX_WORKERS = 10                # Fallback number of threads if not provided
-MAX_TOTAL_MATCHES   = 25               # Limit how many sources to use for calibration
+DEFAULT_MAX_WORKERS = 4                # Fallback number of threads if not provided
+MAX_TOTAL_MATCHES   = 50               # Limit how many sources to use for calibration
 SIGMA_THRESHOLD     = 2.0              # Sigma threshold for iterative clipping
 MAX_ITER            = 3                # Max iterations for sigma clipping
 
