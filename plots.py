@@ -4,13 +4,16 @@ plots.py
 
 Defines a FITSViewer class that embeds a dark‐themed figure with two axes:
 – the upper axis displays the FITS image,
-– the lower axis shows a smaller histogram.
-Interactive events update external Tkinter label widgets for cursor and
-selected source stats. Drag and scroll events enable pan/zoom.
+– the lower axis shows a thinner histogram.
+The figure is created with fixed dimensions (8×6 inches at 100 dpi, i.e. 800×600 pixels)
+so that the image plot window has a fixed 4:3 (landscape) aspect ratio. If the image’s aspect
+does not match, letterboxing is applied so that the image is never cropped.
+Interactive events update external Tkinter label widgets for cursor and selected source stats.
+Pan/zoom, source selection (with snapping within 15 screen pixels), and source toggling are implemented.
 """
 
 import os, json, numpy as np
-from math import cos, radians
+from math import cos, radians, hypot
 
 import matplotlib
 matplotlib.use("TkAgg")
@@ -21,20 +24,18 @@ from astropy.wcs import WCS
 import astropy.units as u
 from astropy.coordinates import SkyCoord
 
-# Dark theme colors for the figure
+# Dark theme colors
 FIG_BG_COLOR = "#2D2D2D"
 AXES_BG_COLOR = "#2D2D2D"
 TEXT_COLOR   = "white"
-# Use a pale blue for the histogram
-HIST_COLOR   = "#a8d8ea"
+HIST_COLOR   = "#a8d8ea"  # pale blue
 
 class FITSViewer:
     def __init__(self, fits_file, parent_frame, stats_labels):
         """
         fits_file    : path to the FITS file.
         parent_frame : Tkinter frame where the figure will be embedded.
-        stats_labels : dict with keys "image", "cursor", "selected" whose .config()
-                       will be updated with stats text.
+        stats_labels : dict with keys "image", "cursor", "selected" whose text will be updated.
         """
         self.fits_file = fits_file
         self.stats_labels = stats_labels
@@ -47,7 +48,7 @@ class FITSViewer:
         self.min_val = np.min(self.data)
         self.max_val = np.max(self.data)
         
-        # Attempt to load astrometry JSON for WCS and source extraction
+        # Load WCS & sources (if available)
         base, _ = os.path.splitext(fits_file)
         json_file = base + "_astrometry_solution.json"
         self.detected_sources = []
@@ -64,7 +65,7 @@ class FITSViewer:
                 orientation = astrometry_data["Orientation (degrees)"]
                 pixscale_deg = pixscale_arcsec / 3600.0
                 self.wcs_object = WCS(naxis=2)
-                self.wcs_object.wcs.crpix = [self.nx / 2.0, self.ny / 2.0]
+                self.wcs_object.wcs.crpix = [self.nx/2.0, self.ny/2.0]
                 self.wcs_object.wcs.crval = [ra_center, dec_center]
                 theta = np.deg2rad(orientation)
                 cd11 = -pixscale_deg * np.cos(theta)
@@ -81,7 +82,7 @@ class FITSViewer:
         else:
             self.wcs_object = WCS(self.header)
         
-        # Fallback: try loading star positions from a text file
+        # Fallback: load star positions if available
         if not self.detected_sources:
             star_file = fits_file.replace('.fits', '_star_positions.txt').replace('.fit', '_star_positions.txt')
             if os.path.exists(star_file):
@@ -98,134 +99,109 @@ class FITSViewer:
             src["ra"] = float(world[0])
             src["dec"] = float(world[1])
         
-        # Update image stats externally (convert total pixels to MP)
+        # Update image stats (values only; headers remain fixed)
         total_pixels = self.data.size / 1e6
-        image_stats_text = (
-            f"Image Stats:\n"
-            f"Total Pixels: {total_pixels:.2f} MP\n"
-            f"Mean: {np.mean(self.data):.2f}\n"
-            f"Median: {np.median(self.data):.2f}\n"
-            f"Std Dev: {np.std(self.data):.2f}\n"
-            f"Min: {self.min_val:.2f}\n"
-            f"Max: {self.max_val:.2f}"
-        )
+        image_stats_text = (f"Total Pixels: {total_pixels:.2f} MP\n"
+                            f"Mean: {np.mean(self.data):.2f}\n"
+                            f"Median: {np.median(self.data):.2f}\n"
+                            f"Std Dev: {np.std(self.data):.2f}\n"
+                            f"Min: {self.min_val:.2f}\n"
+                            f"Max: {self.max_val:.2f}")
         self.stats_labels["image"].config(text=image_stats_text)
-        self.stats_labels["cursor"].config(text="Cursor Stats:\n")
-        self.stats_labels["selected"].config(text="Selected Source Stats:\nNo source selected.\nClick a source to see details.")
+        self.stats_labels["cursor"].config(text="RA: -\nDEC: -\nPixel Value: -")
+        self.stats_labels["selected"].config(text="No source selected.")
         
-        # Create the figure with two axes:
-        # - Image axis (upper): occupies 65% of vertical space
-        # - Histogram axis (lower): occupies 15% of vertical space
-        self.fig = Figure(figsize=(6,6), dpi=100)
+        # Create fixed-dimension figure with a 4:3 aspect ratio (8x6 inches = 800x600px)
+        self.fig = Figure(figsize=(8,6), dpi=100)
         self.fig.patch.set_facecolor(FIG_BG_COLOR)
-        self.ax_image = self.fig.add_axes([0.05, 0.30, 0.9, 0.65], projection=self.wcs_object)
+        # Adjust image axes so that there is enough room for labels:
+        self.ax_image = self.fig.add_axes([0.10, 0.30, 0.80, 0.65], projection=self.wcs_object)
         self.ax_image.set_facecolor(AXES_BG_COLOR)
         self.ax_image.tick_params(colors=TEXT_COLOR, labelcolor=TEXT_COLOR)
         self.ax_image.set_xlabel("RA (hh:mm:ss)", color=TEXT_COLOR)
         self.ax_image.set_ylabel("DEC (deg)", color=TEXT_COLOR)
+        # Display the image (letterboxed if aspect differs)
         self.im = self.ax_image.imshow(self.data, cmap="gray", origin="lower", vmin=self.min_val, vmax=self.max_val)
+        self.ax_image.set_aspect("equal")
         
-        self.ax_hist = self.fig.add_axes([0.05, 0.10, 0.9, 0.15])
+        # Histogram: make it thinner while keeping the same width as the image axes.
+        self.ax_hist = self.fig.add_axes([0.125, 0.05, 0.75, 0.15])
         self.ax_hist.set_facecolor(AXES_BG_COLOR)
         self.ax_hist.tick_params(colors=TEXT_COLOR, labelcolor=TEXT_COLOR)
         self.ax_hist.hist(self.data.flatten(), bins=1000, color=HIST_COLOR, alpha=0.5)
         self.ax_hist.set_yscale("linear")
         
-        # Add vertical hover line to histogram (initially hidden)
+        # Vertical hover line for histogram (initially hidden)
         self.hover_line = self.ax_hist.axvline(x=0, color='red', linestyle='--', visible=False)
         
         # Save original zoom limits
         self.original_xlim = self.ax_image.get_xlim()
         self.original_ylim = self.ax_image.get_ylim()
         
-        # Create the canvas and embed in the parent frame
+        # Embed the figure in the parent frame with fixed dimensions
+        parent_frame.config(width=800, height=600)
         self.canvas = FigureCanvasTkAgg(self.fig, master=parent_frame)
-        self.canvas.get_tk_widget().pack(fill="both", expand=True)
+        widget = self.canvas.get_tk_widget()
+        widget.config(width=800, height=600)
+        widget.pack(fill="both", expand=True)
         self.canvas.draw()
         
-        # Initialize state variables for toggles, dragging, and source overlays
+        # Initialize state variables
         self.auto_stretch = False
         self.log_hist = False
         self.show_sources = False
         self.selected_source_artist = None
-        self.source_artists = []
+        self.source_artist = None  # for scatter overlay of all sources
         self._dragging = False
         self._last_event = None
+        self._drag_moved = False
         
         # Connect interactive events
         self.canvas.mpl_connect("motion_notify_event", self.update_cursor_stats)
-        self.canvas.mpl_connect("button_press_event", self.on_click)  # for source selection
         self.canvas.mpl_connect("button_press_event", self.on_press)
         self.canvas.mpl_connect("button_release_event", self.on_release)
+        self.canvas.mpl_connect("button_press_event", self.on_click)  # source selection
         self.canvas.mpl_connect("motion_notify_event", self.on_drag)
         self.canvas.mpl_connect("scroll_event", self.on_scroll)
     
     def update_cursor_stats(self, event):
         if event.inaxes == self.ax_image and event.xdata is not None and event.ydata is not None:
-            world = self.wcs_object.wcs_pix2world([[event.xdata, event.ydata]], 0)[0]
-            ra, dec = world[0], world[1]
-            ix, iy = int(round(event.xdata)), int(round(event.ydata))
-            pixel_val = self.data[iy, ix] if (0 <= ix < self.nx and 0 <= iy < self.ny) else "N/A"
-            cursor_text = f"Cursor Stats:\nRA: {ra:.5f}\nDEC: {dec:.5f}\nPixel Value: {pixel_val}"
+            try:
+                ix, iy = int(round(event.xdata)), int(round(event.ydata))
+                if 0 <= ix < self.nx and 0 <= iy < self.ny:
+                    pixel_val = self.data[iy, ix]
+                else:
+                    pixel_val = None
+            except Exception:
+                pixel_val = None
+            if pixel_val is None:
+                cursor_text = "RA: -\nDEC: -\nPixel Value: -"
+                self.hover_line.set_visible(False)
+            else:
+                world = self.wcs_object.wcs_pix2world([[event.xdata, event.ydata]], 0)[0]
+                ra, dec = world[0], world[1]
+                cursor_text = f"RA: {ra:.5f}\nDEC: {dec:.5f}\nPixel Value: {pixel_val}"
+                self.hover_line.set_xdata(pixel_val)
+                self.hover_line.set_visible(True)
             self.stats_labels["cursor"].config(text=cursor_text)
-            self.hover_line.set_xdata(pixel_val)
-            self.hover_line.set_visible(True)
             self.canvas.draw_idle()
         else:
-            self.stats_labels["cursor"].config(text="Cursor Stats:\n")
+            self.stats_labels["cursor"].config(text="RA: -\nDEC: -\nPixel Value: -")
             self.hover_line.set_visible(False)
-            self.canvas.draw_idle()
-    
-    def on_click(self, event):
-        if event.inaxes != self.ax_image or event.xdata is None or event.ydata is None:
-            return
-        world = self.wcs_object.wcs_pix2world([[event.xdata, event.ydata]], 0)[0]
-        click_ra, click_dec = world[0], world[1]
-        found = None
-        threshold = 0.001  # in degrees (~3.6 arcsec)
-        for src in self.detected_sources:
-            dra = (click_ra - src["ra"]) * cos(radians((click_dec + src["dec"]) / 2.0))
-            ddec = click_dec - src["dec"]
-            if np.hypot(dra, ddec) < threshold:
-                found = src
-                break
-        if found:
-            src_coord = SkyCoord(ra=found["ra"]*u.deg, dec=found["dec"]*u.deg)
-            src_text = (
-                f"Selected Source Stats:\n"
-                f"Centroid: ({found['xcentroid']:.2f}, {found['ycentroid']:.2f})\n"
-                f"RA: {src_coord.ra.to_string(unit=u.hour, sep=':', pad=True, precision=2)}\n"
-                f"DEC: {src_coord.dec.to_string(sep=':', pad=True, alwayssign=True, precision=2)}\n"
-                f"Flux: {found.get('flux', found.get('Flux', 0)):.2f}"
-            )
-            self.stats_labels["selected"].config(text=src_text)
-            if self.selected_source_artist is not None:
-                self.selected_source_artist.remove()
-            xsrc, ysrc = found["xcentroid"], found["ycentroid"]
-            self.selected_source_artist, = self.ax_image.plot(
-                xsrc, ysrc, marker='o', markersize=15,
-                markeredgecolor='yellow', markerfacecolor='none', lw=2,
-                transform=self.ax_image.get_transform('pixel')
-            )
-            self.canvas.draw_idle()
-        else:
-            self.stats_labels["selected"].config(
-                text="Selected Source Stats:\nNo source selected.\nClick a source to see details."
-            )
-            if self.selected_source_artist is not None:
-                self.selected_source_artist.remove()
-                self.selected_source_artist = None
             self.canvas.draw_idle()
     
     def on_press(self, event):
         if event.inaxes == self.ax_image and event.button == 1:
             self._dragging = True
             self._last_event = event
+            self._drag_moved = False
     
     def on_drag(self, event):
         if self._dragging and event.inaxes == self.ax_image and self._last_event is not None:
             dx = event.x - self._last_event.x
             dy = event.y - self._last_event.y
+            if abs(dx) > 5 or abs(dy) > 5:
+                self._drag_moved = True
             inv = self.ax_image.transData.inverted()
             p0 = inv.transform((self._last_event.x, self._last_event.y))
             p1 = inv.transform((event.x, event.y))
@@ -240,6 +216,38 @@ class FITSViewer:
     def on_release(self, event):
         self._dragging = False
         self._last_event = None
+    
+    def on_click(self, event):
+        # If dragging occurred, do not update selection.
+        if self._drag_moved:
+            return
+        if event.inaxes != self.ax_image or event.xdata is None or event.ydata is None:
+            return
+        # Convert the click location to display (screen) coordinates.
+        click_disp = self.ax_image.transData.transform((event.xdata, event.ydata))
+        min_dist = float('inf')
+        found = None
+        for src in self.detected_sources:
+            src_disp = self.ax_image.transData.transform((src["xcentroid"], src["ycentroid"]))
+            dist = hypot(click_disp[0]-src_disp[0], click_disp[1]-src_disp[1])
+            if dist < min_dist:
+                min_dist = dist
+                found = src
+        if min_dist <= 15:  # only snap if within 15 screen pixels
+            src_coord = SkyCoord(ra=found["ra"]*u.deg, dec=found["dec"]*u.deg)
+            src_text = (f"RA: {src_coord.ra.to_string(unit=u.hour, sep=':', pad=True, precision=2)}\n"
+                        f"DEC: {src_coord.dec.to_string(sep=':', pad=True, alwayssign=True, precision=2)}\n"
+                        f"Flux: {found.get('flux', found.get('Flux', 0)):.2f}")
+            self.stats_labels["selected"].config(text=src_text)
+            if self.selected_source_artist is not None:
+                self.selected_source_artist.remove()
+            self.selected_source_artist, = self.ax_image.plot(
+                found["xcentroid"], found["ycentroid"], marker='o', markersize=15,
+                markeredgecolor='yellow', markerfacecolor='none', lw=2,
+                transform=self.ax_image.get_transform('pixel')
+            )
+            self.canvas.draw_idle()
+        # Else, do nothing (retain current selection)
     
     def on_scroll(self, event):
         if event.inaxes != self.ax_image or event.xdata is None or event.ydata is None:
@@ -308,18 +316,16 @@ class FITSViewer:
     
     def toggle_sources(self):
         if not self.show_sources:
-            self.source_artists = []
-            for src in self.detected_sources:
-                artist, = self.ax_image.plot(
-                    src["xcentroid"], src["ycentroid"], marker='o', markersize=10,
-                    markeredgecolor='red', markerfacecolor='none', lw=1,
-                    transform=self.ax_image.get_transform('pixel')
-                )
-                self.source_artists.append(artist)
+            # Use a single scatter artist for efficiency.
+            x_coords = [src["xcentroid"] for src in self.detected_sources]
+            y_coords = [src["ycentroid"] for src in self.detected_sources]
+            self.source_artist = self.ax_image.scatter(x_coords, y_coords, s=40,
+                                                        edgecolors='red', facecolors='none', lw=0.8,
+                                                        transform=self.ax_image.get_transform('pixel'))
             self.show_sources = True
         else:
-            for artist in self.source_artists:
-                artist.remove()
-            self.source_artists = []
+            if self.source_artist is not None:
+                self.source_artist.remove()
+                self.source_artist = None
             self.show_sources = False
         self.canvas.draw_idle()
