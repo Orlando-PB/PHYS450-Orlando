@@ -1,228 +1,231 @@
-#!/usr/bin/env python3
-"""
-photometric_calibration.py
-
-This script loads an image’s JSON file (which was updated by the source extraction process)
-and updates it with a calibrated magnitude (here referred to as "absolute magnitude")
-for each source based on a calibration derived from Gaia reference stars.
-
-Usage:
-    python photometric_calibration.py <path_to_image_json>
-"""
-
-import sys
+# photometric_calibration.py
 import json
+import random
+import time
 import numpy as np
-import os
 
-from astropy.coordinates import SkyCoord
-from astropy import units as u
-from astropy.wcs import WCS
 from astroquery.gaia import Gaia
+from astropy.coordinates import SkyCoord
+import astropy.units as u
+import concurrent.futures
 
-# Global debug flag
-DEBUG = True
+# -------------------------------------------
+#  Configurable parameters
+# -------------------------------------------
+SEARCH_RADIUS = 10 * u.arcsec     # Radius for Gaia cone search
+DEFAULT_MAX_WORKERS   = 10        # Fallback number of threads if not provided
+MAX_TOTAL_MATCHES = 25            # Limit how many sources to use for calibration
+SIGMA_THRESHOLD   = 2.0           # Sigma threshold for iterative clipping
+MAX_ITER          = 3             # Max iterations for sigma clipping
 
-def query_gaia_catalog(ra_center, dec_center, radius_deg):
+
+# ----------------------------------------------------------------------
+#  MAIN ENTRY: perform_photometric_calibration
+# ----------------------------------------------------------------------
+def perform_photometric_calibration(json_path, gaia_filter_column="phot_g_mean_mag", max_workers=None):
     """
-    Query the Gaia catalogue around a central position.
-    
+    Queries Gaia for up to MAX_TOTAL_MATCHES sources from the given JSON,
+    does a linear fit (y = m*x + b) with sigma clipping, and stores the
+    resulting slope & intercept. Also applies the calibration to all
+    sources in the JSON, adding 'calibrated_mag' to each.
+
     Parameters
     ----------
-    ra_center, dec_center : float
-        The central coordinates (in degrees) of the image.
-    radius_deg : float
-        The radius (in degrees) around the center to query.
-    
+    json_path : str
+        Path to the JSON file that contains "sources" with at least
+        'ra', 'dec', 'daofind_mag'.
+    gaia_filter_column : str
+        Which Gaia column to use, e.g. 'phot_bp_mean_mag', 'phot_rp_mean_mag',
+        or 'phot_g_mean_mag'.
+    max_workers : int, optional
+        Number of worker threads for Gaia queries. If None, defaults to DEFAULT_MAX_WORKERS.
+
     Returns
     -------
-    gaia_results : astropy Table
-        The table of Gaia sources.
+    (slope, intercept) or None if calibration failed or no matches found.
     """
-    coord = SkyCoord(ra=ra_center*u.deg, dec=dec_center*u.deg)
-    print(f"Querying Gaia within {radius_deg} deg of RA={ra_center}, Dec={dec_center} ...")
-    
-    job = Gaia.cone_search_async(coordinate=coord, radius=radius_deg*u.deg)
-    gaia_results = job.get_results()
-    print(f"Found {len(gaia_results)} Gaia sources.")
-    
-    if DEBUG:
-        # Print first few Gaia source positions for inspection.
-        print("Sample Gaia source coordinates (RA, Dec):")
-        for i in range(min(5, len(gaia_results))):
-            print(f"  {i}: ({gaia_results['ra'][i]:.5f}, {gaia_results['dec'][i]:.5f})")
-    
-    return gaia_results
-
-def cross_match_sources(sources, gaia_table, tolerance=2.0):
-    """
-    Cross-match extracted sources with Gaia stars.
-    
-    Parameters
-    ----------
-    sources : list of dict
-        List of sources from the JSON file. Each should have 'ra', 'dec', and 'flux'.
-    gaia_table : astropy Table
-        The Gaia reference table (must have 'ra', 'dec', and a photometric column, e.g., 'phot_g_mean_mag').
-    tolerance : float, optional
-        Matching tolerance in arcseconds.
-    
-    Returns
-    -------
-    match_info : list of tuples
-        Each tuple is (source_index, gaia_mag, inst_mag_diff)
-        where inst_mag_diff = (Gaia_mag - instrumental_mag).
-    """
-    if not sources:
-        print("No extracted sources available for matching.")
-        return []
-
-    # Build SkyCoord objects for our extracted sources and Gaia sources.
     try:
-        source_ra = [src['ra'] for src in sources]
-        source_dec = [src['dec'] for src in sources]
-    except KeyError:
-        print("One or more sources do not have 'ra' and 'dec' keys. Check your JSON output.")
-        return []
-    
-    if DEBUG:
-        print(f"Found {len(source_ra)} extracted sources. Sample positions:")
-        for i in range(min(5, len(source_ra))):
-            print(f"  Source {i}: RA={source_ra[i]:.5f}, Dec={source_dec[i]:.5f}")
-    
-    source_coords = SkyCoord(ra=source_ra*u.deg,
-                             dec=source_dec*u.deg)
-    gaia_coords = SkyCoord(ra=gaia_table['ra'], dec=gaia_table['dec'], unit='deg')
-    
-    # Perform the matching.
-    idx, d2d, _ = source_coords.match_to_catalog_sky(gaia_coords)
-    
-    match_info = []
-    for i, sep in enumerate(d2d):
-        sep_arcsec = sep.arcsec
-        if DEBUG:
-            # Print each source's nearest neighbor separation even if it misses the tolerance.
-            print(f"Source {i}: Separation to nearest Gaia star = {sep_arcsec:.2f} arcsec")
-        if sep_arcsec < tolerance:
-            gaia_mag = gaia_table['phot_g_mean_mag'][idx[i]]
-            flux = sources[i].get('flux', None)
-            if flux is None or flux <= 0:
-                if DEBUG:
-                    print(f"  Source {i} skipped due to invalid flux: {flux}")
-                continue  # skip if no valid flux
-            inst_mag = -2.5 * np.log10(flux)
-            diff = gaia_mag - inst_mag
-            match_info.append( (i, gaia_mag, diff) )
-    
-    print(f"Matched {len(match_info)} extracted sources with Gaia within {tolerance} arcsec tolerance.")
-    if len(match_info) == 0:
-        print("No matches found. Consider:")
-        print("  - Verifying that your extracted source coordinates are in RA/Dec (not pixel values).")
-        print("  - Increasing the matching tolerance (currently set to 2 arcsec).")
-        print("  - Excluding extended or non-stellar sources (e.g., sources in the galaxy).")
-    return match_info
+        with open(json_path, "r") as f:
+            data = json.load(f)
+    except Exception as e:
+        print(f"[Calibration] Could not load JSON {json_path}: {e}")
+        return None
 
-def calibrate_sources(sources, match_info):
-    """
-    Compute the zero-point offset and update each source with a calibrated magnitude.
-    
-    Parameters
-    ----------
-    sources : list of dict
-        List of sources to update.
-    match_info : list of tuples (source_index, gaia_mag, diff)
-    
-    Returns
-    -------
-    zero_point : float
-        The computed calibration zero point.
-    """
-    if not match_info:
-        raise ValueError("No calibration stars found to compute zero point.")
-    
-    diffs = [info[2] for info in match_info]
-    zero_point = np.median(diffs)
-    print(f"Computed zero point offset: {zero_point:.3f} mag")
-    
-    # Update each source with the calibrated magnitude.
-    for i, src in enumerate(sources):
-        flux = src.get('flux', None)
-        if flux is not None and flux > 0:
-            inst_mag = -2.5 * np.log10(flux)
-            calibrated_mag = inst_mag + zero_point
-            src['absolute_magnitude'] = calibrated_mag
+    sources_list = data.get("sources", [])
+    if not sources_list:
+        print(f"[Calibration] No sources found in JSON. Aborting.")
+        return None
+
+    # 1) Shuffle and pick up to MAX_TOTAL_MATCHES for the Gaia query
+    random.shuffle(sources_list)
+    subset = sources_list[:MAX_TOTAL_MATCHES]
+
+    # 2) Run Gaia queries in parallel
+    matches = run_gaia_queries(subset, gaia_filter_column=gaia_filter_column, max_workers=max_workers)
+
+    if not matches:
+        print("[Calibration] No valid Gaia matches to build calibration. Aborting.")
+        return None
+
+    # 3) Extract arrays for the linear fit
+    x = np.array([m["daofind_mag"] for m in matches])
+    y = np.array([m["gaia_mag"]     for m in matches])
+
+    valid_idx = (~np.isnan(x)) & (~np.isnan(y))
+    x = x[valid_idx]
+    y = y[valid_idx]
+
+    if len(x) < 2:
+        print("[Calibration] Not enough points to do a linear fit. Aborting.")
+        return None
+
+    # 4) Do a linear fit with sigma clipping
+    slope, intercept, mask = linear_fit_with_sigma_clipping(x, y, SIGMA_THRESHOLD, MAX_ITER)
+
+    if slope is None or intercept is None:
+        print("[Calibration] Failed to compute linear calibration.")
+        return None
+
+    print(f"[Calibration] Computed linear fit: y = {slope:.3f}*x + {intercept:.3f}")
+
+    # 5) Store slope & intercept in the JSON
+    data["photometric_calibration"] = {
+        "gaia_filter_column": gaia_filter_column,
+        "slope": slope,
+        "intercept": intercept
+    }
+
+    # 6) Compute 'calibrated_mag' for ALL sources
+    for s in sources_list:
+        dao_mag = s.get("daofind_mag")
+        if dao_mag is not None and not np.isnan(dao_mag):
+            s["calibrated_mag"] = float(slope * dao_mag + intercept)
         else:
-            src['absolute_magnitude'] = None
-    return zero_point
+            s["calibrated_mag"] = None
 
-def update_json_with_calibration(json_file, radius_deg=None):
+    # 7) Write updated JSON to disk
+    with open(json_path, "w") as f:
+        json.dump(data, f, indent=4)
+
+    return (slope, intercept)
+
+
+# -------------------------------------------
+#  Gaia Query
+# -------------------------------------------
+def run_gaia_queries(sources_list, gaia_filter_column, max_workers=None):
     """
-    Load the JSON file, perform photometric calibration using Gaia, and update the JSON with calibrated magnitudes.
-    
+    Queries Gaia for each source in `sources_list`, returning only those
+    that yield a valid `gaia_filter_column` magnitude. We also keep the
+    daofind_mag from the source for the final fit.
+
     Parameters
     ----------
-    json_file : str
-        Path to the image JSON file.
-    radius_deg : float, optional
-        Radius (in degrees) to use for querying Gaia. If not provided, it will try to use the "Field Radius" key in the JSON.
-    """
-    if not os.path.exists(json_file):
-        print(f"JSON file {json_file} does not exist.")
-        return
-    
-    with open(json_file, "r") as infile:
-        data = json.load(infile)
-    
-    # Check that the JSON file has the necessary WCS/image info.
-    try:
-        image_ra = data["Right Ascension"]
-        image_dec = data["Declination"]
-    except KeyError:
-        print("Image center coordinates (Right Ascension and Declination) not found in JSON.")
-        return
-    
-    # Determine the search radius for Gaia.
-    if radius_deg is None:
-        radius_deg = data.get("Field Radius", 0.5)  # default to 0.5 deg if not specified
-    
-    # Get the list of sources.
-    sources = data.get("sources", [])
-    if not sources:
-        print("No sources found in JSON to calibrate.")
-        return
-    
-    # OPTIONAL: Exclude sources that may be extended (for example, in a galaxy)
-    # if your JSON includes parameters (e.g., "FWHM", "ellipticity", etc.) to flag extended sources.
-    # For example:
-    # sources = [src for src in sources if src.get('FWHM', 0) < some_threshold]
-    
-    # Query Gaia for reference stars.
-    gaia_table = query_gaia_catalog(image_ra, image_dec, radius_deg)
-    if len(gaia_table) == 0:
-        print("No Gaia sources returned from query; cannot perform calibration.")
-        return
-    
-    # Cross-match the extracted sources to Gaia.
-    match_info = cross_match_sources(sources, gaia_table, tolerance=2.0)
-    if not match_info:
-        print("No matching Gaia stars found; cannot perform calibration.")
-        return
-    
-    # Compute the zero point and update each source.
-    zero_point = calibrate_sources(sources, match_info)
-    
-    # Add the zero point to the top-level JSON.
-    data["photometric_zero_point"] = zero_point
-    
-    # Save the updated JSON.
-    with open(json_file, "w") as outfile:
-        json.dump(data, outfile, indent=4)
-    print(f"Updated JSON file saved: {json_file}")
+    sources_list : list
+        List of source dictionaries.
+    gaia_filter_column : str
+        Gaia column to query.
+    max_workers : int, optional
+        Number of worker threads to use.
 
-if __name__ == '__main__':
-    if len(sys.argv) != 2:
-        print("Usage: python photometric_calibration.py <path_to_image_json>")
-        sys.exit(1)
-    
-    json_path = sys.argv[1]
-    update_json_with_calibration(json_path)
+    Returns
+    -------
+    List of dict with keys: {"daofind_mag", "gaia_mag"}.
+    """
+    matches = []
+    start_time = time.time()
+    completed_count = 0
+    total_futures = len(sources_list)
+    workers = max_workers if max_workers is not None else DEFAULT_MAX_WORKERS
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = {executor.submit(query_single_source, src, gaia_filter_column): src
+                   for src in sources_list}
+
+        for future in concurrent.futures.as_completed(futures):
+            completed_count += 1
+            result = future.result()
+            if result is not None:
+                matches.append(result)
+
+            if completed_count % 5 == 0 or completed_count == total_futures:
+                elapsed = time.time() - start_time
+                avg_time = elapsed / completed_count
+                est_total = total_futures * avg_time
+                remaining = est_total - elapsed
+                print(f"[Gaia Query] Completed {completed_count}/{total_futures}. "
+                      f"Est. time remaining: {remaining:.1f}s. Matches: {len(matches)}")
+    return matches
+
+
+def query_single_source(source, gaia_filter_column):
+    """
+    Tries to query Gaia for a single source. If successful, returns
+    {"daofind_mag", "gaia_mag"}. If not, returns None.
+    """
+    try:
+        ra = source.get("ra")
+        dec = source.get("dec")
+        dao_mag = source.get("daofind_mag")
+
+        if ra is None or dec is None or dao_mag is None:
+            return None
+
+        coord = SkyCoord(ra=ra*u.deg, dec=dec*u.deg, frame="icrs")
+        job = Gaia.cone_search_async(coordinate=coord, radius=SEARCH_RADIUS)
+        results = job.get_results()
+
+        if len(results) == 0 or (gaia_filter_column not in results.colnames):
+            return None
+
+        if 'dist' in results.colnames:
+            results.sort('dist')
+        elif 'angular_distance' in results.colnames:
+            results.sort('angular_distance')
+
+        best = results[0]
+        val = best[gaia_filter_column]
+
+        if (val is np.ma.masked) or np.isnan(val):
+            return None
+
+        return {
+            "daofind_mag": float(dao_mag),
+            "gaia_mag": float(val)
+        }
+
+    except Exception as e:
+        return None
+
+
+# -------------------------------------------
+#  Linear Fit with Sigma Clipping
+# -------------------------------------------
+def linear_fit_with_sigma_clipping(x, y, sigma_threshold, max_iter=3):
+    """
+    Fits y = slope*x + intercept, using iterative sigma clipping.
+    Returns (slope, intercept, mask) or (None, None, None) on failure.
+    """
+    if len(x) < 2:
+        return (None, None, None)
+
+    mask = np.ones_like(x, dtype=bool)
+    slope, intercept = None, None
+
+    for _ in range(max_iter):
+        slope, intercept = np.polyfit(x[mask], y[mask], deg=1)
+        y_fit = slope * x + intercept
+        residuals = y - y_fit
+
+        std_resid = np.std(residuals[mask])
+        new_mask = mask & (np.abs(residuals) < sigma_threshold * std_resid)
+
+        if np.array_equal(new_mask, mask):
+            break
+
+        mask = new_mask
+
+        if sum(mask) < 2:
+            return (None, None, None)
+
+    return (slope, intercept, mask)
