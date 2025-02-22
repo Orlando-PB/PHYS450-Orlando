@@ -80,7 +80,7 @@ def run_gui():
 
     tk.Label(frame, text="Base Folder:").grid(row=0, column=0, sticky="e")
     base_folder_entry = tk.Entry(frame, width=50)
-    base_folder_entry.insert(0, "./demo")
+    base_folder_entry.insert(0, "./demo small")
     base_folder_entry.grid(row=0, column=1, padx=5)
 
     tk.Button(frame, text="Browse", command=select_folder).grid(row=0, column=2, padx=5)
@@ -93,9 +93,6 @@ def run_gui():
     )
     tk.Checkbutton(frame, text="Use Biases", variable=use_biases_var).grid(
         row=3, column=0, sticky="w"
-    )
-    tk.Checkbutton(frame, text="Stack", variable=stack_var).grid(
-        row=4, column=0, sticky="w"
     )
 
     tk.Button(frame, text="Start Processing", command=start_processing).grid(

@@ -2,7 +2,6 @@ import os
 import shutil
 import fnmatch
 from astropy.io import fits
-import numpy as np
 
 def sort_files_into_subfolders(base_folder):
     # Auto Sort Files into appropriate Folders
@@ -73,23 +72,3 @@ def sort_files_into_subfolders(base_folder):
 
     return categories
 
-'''
-def calculate_median_frame(frames):
-    # Calculate Median
-    stacked_frames = np.stack(frames, axis=0)
-    median_frame = np.median(stacked_frames, axis=0)
-    
-    return median_frame
-
-def load_combined_fits(base_folder, category):
-    # Loading Fits
-    folder = os.path.join(base_folder, category + 's')
-    master_file = os.path.join(folder, f"master_{category.lower()}.fit")
-
-    if not os.path.exists(master_file):
-        raise FileNotFoundError(f"Master {category.lower()} file not found.")
-    
-    with fits.open(master_file) as hdul:
-        data = hdul[0].data
-    return data
-'''
