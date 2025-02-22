@@ -8,27 +8,19 @@ import astrometry
 from utils import sort_files_into_subfolders
 from source_extraction import extract_sources
 import concurrent.futures
-import threading  # For semaphores
-
-# NEW: import the calibration function
+import threading
 from photometric_calibration import perform_photometric_calibration
 
-# -----------------------------------------------------------------------
-# Concurrency-limiting semaphores
-# Change these values as desired
-ASTROMETRY_SEMAPHORE = threading.Semaphore(5)   # At most 5 astrometry solves in parallel
-PHOTOMETRY_SEMAPHORE = threading.Semaphore(1)     # Photometry can run only on 1 file at a time
-# -----------------------------------------------------------------------
+
+ASTROMETRY_SEMAPHORE = threading.Semaphore(4)
+PHOTOMETRY_SEMAPHORE = threading.Semaphore(1)
 
 def process_light_images(base_folder, output_folder,
                          use_flats=True, use_darks=True, use_biases=True,
                          do_astrometry=True, astrometry_api_key=None,
                          progress_callback=None,
                          max_workers=3):
-    """
-    Process light images: bias, dark, flat calibration. Optionally run astrometry, source extraction,
-    and photometric calibration. Reports progress via a progress_callback function if provided.
-    """
+
 
     def _report(msg, **kwargs):
         if progress_callback:
@@ -102,7 +94,7 @@ def process_light_images(base_folder, output_folder,
         _report(f"Flats: 0/0 (done)", category="flat", current=0, total=0, done=True, color="green")
 
     # -------------------------------------------------------------------
-    # 4) Setup astrometry if requested
+    # 4) Setup astrometry
     # -------------------------------------------------------------------
     astrometry_session = None
     if do_astrometry:
@@ -127,19 +119,11 @@ def process_light_images(base_folder, output_folder,
         "B": "phot_bp_mean_mag",
         "R": "phot_rp_mean_mag",
         "G": "phot_g_mean_mag",
-        "L": "phot_g_mean_mag",  # L uses G as an approximation
+        "L": "phot_g_mean_mag",
     }
 
     def calibrate_and_annotate(light_path, filter_name):
-        """
-        Processes a single light frame:
-          1) Subtracts master bias, master dark
-          2) Divides by master flat
-          3) Saves calibrated .fit
-          4) Runs astrometry (limited to 5 concurrent)
-          5) Source extraction
-          6) Photometric calibration (limited to 1 at a time, uses all threads internally)
-        """
+
         nonlocal master_bias, master_dark
         _report(f"Processing light: {os.path.basename(light_path)}")
 
@@ -161,7 +145,6 @@ def process_light_images(base_folder, output_folder,
         mf_path = os.path.join(calibration_folder, f"master_flat_{filter_name}.fit")
         if os.path.exists(mf_path):
             mf = load_master_frame(calibration_folder, f"master_flat_{filter_name}")
-            # Avoid division by zero
             mf[mf == 0] = 1.0
             light_data /= mf
 
@@ -176,10 +159,9 @@ def process_light_images(base_folder, output_folder,
         # (B) Astrometry
         # -------------------
         if do_astrometry and astrometry_session:
-            with ASTROMETRY_SEMAPHORE:  # Limit concurrency to 5
+            with ASTROMETRY_SEMAPHORE: 
                 try:
                     _report(f"Running astrometry on {os.path.basename(out_name)}")
-                    # Call the improved astrometry function
                     astrometry_result = astrometry.process_image(out_name, astrometry_session)
                     _report(
                         f"Astrometry success: RA={astrometry_result.get('Right Ascension')}, "

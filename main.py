@@ -7,7 +7,7 @@ import tkinter.font as tkfont
 from PIL import ImageTk, Image, ImageOps
 
 from fits_processor import process_light_images
-from utils import sort_files_into_subfolders  # For pre-loading counts
+from utils import sort_files_into_subfolders
 from plots import FITSViewer
 
 BG_COLOR = "#2B2B2B"
@@ -62,13 +62,11 @@ def run_app():
     use_darks_var = tk.BooleanVar(value=True)
     use_biases_var = tk.BooleanVar(value=True)
     
-    # New: Dropdown for selecting number of worker threads.
-    # Compute default as 80% of available threads.
+
     cpu_count = os.cpu_count() or 1
     default_workers = min(4, int(cpu_count))
     thread_options = [str(i) for i in range(1, cpu_count + 1)]
     
-    # Add label and combobox to proc_frame (row 5)
     ttk.Label(proc_frame, text="Worker Threads:").grid(row=5, column=0, sticky="e", padx=5, pady=5)
     threads_combo = ttk.Combobox(proc_frame, values=thread_options, width=5)
     threads_combo.grid(row=5, column=1, sticky="w", padx=5, pady=5)
@@ -106,7 +104,6 @@ def run_app():
     
     def start_processing():
         base_folder = base_folder_entry.get()
-        # Pre-calculate counts (so lights count is loaded immediately)
         try:
             sorted_categories = sort_files_into_subfolders(base_folder)
         except Exception as e:
@@ -118,26 +115,22 @@ def run_app():
         flat_count  = sum(len(flats) for flats in sorted_categories['Flat'].values()) if use_flats_var.get() else 0
         light_count = sum(len(files) for files in sorted_categories['Light'].values())
     
-        # Reset labels and colours for a fresh run
         update_label("bias", f"Bias: 0/{bias_count}", color=FG_COLOR)
         update_label("dark", f"Darks: 0/{dark_count}", color=FG_COLOR)
         update_label("flat", f"Flats: 0/{flat_count}", color=FG_COLOR)
         update_label("light", f"Lights: 0/{light_count}", color=FG_COLOR)
         update_label("message", "Starting processing...", color=FG_COLOR)
     
-        # Determine a unique output folder
         output_number = 1
         while os.path.exists(os.path.join(base_folder, f"Output {output_number}")):
             output_number += 1
         output_folder = os.path.join(base_folder, f"Output {output_number}")
     
-        # Get worker thread count from dropdown
         try:
             max_workers = int(threads_combo.get())
         except ValueError:
-            max_workers = default_workers  # Fallback if conversion fails
+            max_workers = default_workers 
     
-        # Define a callback for processing updates
         def gui_callback(msg, category=None, current=None, total=None, done=False, color=None):
             def real_update():
                 if category in ("bias", "dark", "flat", "light") and current is not None and total is not None:
@@ -191,7 +184,7 @@ def run_app():
     ttk.Checkbutton(proc_frame, text="Use Biases", variable=use_biases_var).grid(row=3, column=0, sticky="w", padx=5, pady=5)
     ttk.Button(proc_frame, image=icon_start, compound="left", text="Start Processing", command=start_processing).grid(row=4, column=1, pady=10)
     
-    # ---------------- Viewer Tab (unchanged) ----------------
+    # ---------------- Viewer Tab  ----------------
     viewer_tab = ttk.Frame(notebook)
     notebook.add(viewer_tab, text="Viewer")
     
@@ -294,7 +287,7 @@ def run_app():
     ttk.Button(btns_frame, image=icon_toggle_sources, compound="left", text="Sources",
                command=lambda: viewer_instance and viewer_instance.toggle_sources()).pack(fill="x", pady=2)
     
-    # Keep icon references
+    # icon references
     root.icon_browse         = icon_browse
     root.icon_start          = icon_start
     root.icon_open_fits      = icon_open_fits

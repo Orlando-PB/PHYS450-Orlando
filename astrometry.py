@@ -7,21 +7,18 @@ import psutil
 import os
 
 # --- Configuration ---
-API_KEY = "pyplbxajvnsqyifn"  # Replace with your actual API key
+API_KEY = "pyplbxajvnsqyifn"
 BASE_LOGIN_URL = "http://nova.astrometry.net/api/login"
 UPLOAD_URL = "http://nova.astrometry.net/api/upload"
 SUBMISSIONS_URL = "http://nova.astrometry.net/api/submissions"
 JOBS_URL = "http://nova.astrometry.net/api/jobs"
 
 # Polling configuration
-MAX_POLL_ATTEMPTS = 60      # Increased maximum number of polling attempts
-POLL_INTERVAL = 10          # Seconds between polling attempts
+MAX_POLL_ATTEMPTS = 60
+POLL_INTERVAL = 10 
 
 def setup_astrometry():
-    """
-    Logs into astrometry.net, checks available memory, and returns the session token.
-    Raises an Exception if login fails.
-    """
+
     available_memory = psutil.virtual_memory().available
     print("Available memory (bytes):", available_memory)
     
@@ -35,10 +32,7 @@ def setup_astrometry():
     return session
 
 def process_image(image_path, session):
-    """
-    Uploads an image to astrometry.net and polls until the astrometric solution is available.
-    Raises an exception if a job ID is not assigned within the maximum polling attempts.
-    """
+
     with requests.Session() as s:
         upload_payload = {
             "session": session,
@@ -60,7 +54,7 @@ def process_image(image_path, session):
         if not subid:
             raise Exception("Image upload failed or did not return a submission id.")
         
-        # --- Step 2: Poll for a job ID ---
+        # --- Poll for a job ID ---
         submission_url = f"{SUBMISSIONS_URL}/{subid}"
         job_id = None
         attempt = 0
@@ -71,18 +65,17 @@ def process_image(image_path, session):
             submission_response = s.get(submission_url)
             submission_data = submission_response.json()
             print(f"Submission status (attempt {attempt}):", submission_data)
-            # Check if jobs list is non-empty and contains a valid job ID
             if "jobs" in submission_data:
                 jobs = submission_data["jobs"]
                 if jobs and jobs[0] is not None:
-                    job_id = jobs[0]  # Use the first job id
+                    job_id = jobs[0]
                     break
         
         if job_id is None:
             raise Exception("Timeout waiting for job ID after {} attempts.".format(MAX_POLL_ATTEMPTS))
         print("Job ID assigned:", job_id)
         
-        # --- Step 3: Poll for the astrometric solution ---
+        # --- Poll for the astrometric solution ---
         job_info_url = f"{JOBS_URL}/{job_id}/info"
         calibration = None
         attempt = 0
@@ -100,7 +93,7 @@ def process_image(image_path, session):
         if calibration is None:
             raise Exception("Timeout waiting for astrometric solution after {} attempts.".format(MAX_POLL_ATTEMPTS))
         
-        # --- Step 4: Extract and display the calibration ---
+        # --- Extract and display the calibration ---
         ra = calibration.get("ra")
         dec = calibration.get("dec")
         pixscale = calibration.get("pixscale")
@@ -121,7 +114,7 @@ def process_image(image_path, session):
             "Parity": calibration.get("parity")
         }
         
-        # --- Step 5: Save the solution as a JSON file next to the image ---
+        # --- Save the solution as a JSON file next to the image ---
         image_dir = os.path.dirname(image_path)
         base_name = os.path.splitext(os.path.basename(image_path))[0]
         json_filename = os.path.join(image_dir, f"{base_name}_astrometry_solution.json")

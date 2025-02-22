@@ -1,17 +1,3 @@
-#!/usr/bin/env python3
-"""
-plots.py
-
-Defines a FITSViewer class that embeds a dark‐themed figure with two axes:
-– the upper axis displays the FITS image,
-– the lower axis shows a thinner histogram.
-The figure is created with fixed dimensions (8×6 inches at 100 dpi, i.e. 800×600 pixels)
-so that the image plot window has a fixed 4:3 (landscape) aspect ratio. If the image’s aspect
-does not match, letterboxing is applied so that the image is never cropped.
-Interactive events update external Tkinter label widgets for cursor and selected source stats.
-Pan/zoom, source selection (with snapping within 15 screen pixels), and source toggling are implemented.
-"""
-
 import os, json, numpy as np
 from math import cos, radians, hypot
 
@@ -24,19 +10,14 @@ from astropy.wcs import WCS
 import astropy.units as u
 from astropy.coordinates import SkyCoord
 
-# Dark theme colors
 FIG_BG_COLOR = "#2D2D2D"
 AXES_BG_COLOR = "#2D2D2D"
 TEXT_COLOR   = "white"
-HIST_COLOR   = "#a8d8ea"  # pale blue
+HIST_COLOR   = "#a8d8ea" 
 
 class FITSViewer:
     def __init__(self, fits_file, parent_frame, stats_labels):
-        """
-        fits_file    : path to the FITS file.
-        parent_frame : Tkinter frame where the figure will be embedded.
-        stats_labels : dict with keys "image", "cursor", "selected" whose text will be updated.
-        """
+
         self.fits_file = fits_file
         self.stats_labels = stats_labels
         
@@ -48,7 +29,6 @@ class FITSViewer:
         self.min_val = np.min(self.data)
         self.max_val = np.max(self.data)
         
-        # Load WCS & sources (if available)
         base, _ = os.path.splitext(fits_file)
         json_file = base + "_astrometry_solution.json"
         self.detected_sources = []
@@ -82,7 +62,6 @@ class FITSViewer:
         else:
             self.wcs_object = WCS(self.header)
         
-        # Fallback: load star positions if available
         if not self.detected_sources:
             star_file = fits_file.replace('.fits', '_star_positions.txt').replace('.fit', '_star_positions.txt')
             if os.path.exists(star_file):
@@ -93,13 +72,11 @@ class FITSViewer:
                             self.detected_sources.append({"xcentroid": float(x), "ycentroid": float(y)})
                         except ValueError:
                             continue
-        # Convert source pixel coordinates to world coordinates
         for src in self.detected_sources:
             world = self.wcs_object.wcs_pix2world([[src["xcentroid"], src["ycentroid"]]], 0)[0]
             src["ra"] = float(world[0])
             src["dec"] = float(world[1])
         
-        # Update image stats (values only; headers remain fixed)
         total_pixels = self.data.size / 1e6
         image_stats_text = (f"Total Pixels: {total_pixels:.2f} MP\n"
                             f"Mean: {np.mean(self.data):.2f}\n"
@@ -111,34 +88,27 @@ class FITSViewer:
         self.stats_labels["cursor"].config(text="RA: -\nDEC: -\nPixel Value: -")
         self.stats_labels["selected"].config(text="No source selected.")
         
-        # Create fixed-dimension figure with a 4:3 aspect ratio (8x6 inches = 800x600px)
         self.fig = Figure(figsize=(8,6), dpi=100)
         self.fig.patch.set_facecolor(FIG_BG_COLOR)
-        # Adjust image axes so that there is enough room for labels:
         self.ax_image = self.fig.add_axes([0.10, 0.30, 0.80, 0.65], projection=self.wcs_object)
         self.ax_image.set_facecolor(AXES_BG_COLOR)
         self.ax_image.tick_params(colors=TEXT_COLOR, labelcolor=TEXT_COLOR)
         self.ax_image.set_xlabel("RA (hh:mm:ss)", color=TEXT_COLOR)
         self.ax_image.set_ylabel("DEC (deg)", color=TEXT_COLOR)
-        # Display the image (letterboxed if aspect differs)
         self.im = self.ax_image.imshow(self.data, cmap="gray", origin="lower", vmin=self.min_val, vmax=self.max_val)
         self.ax_image.set_aspect("equal")
         
-        # Histogram: make it thinner while keeping the same width as the image axes.
         self.ax_hist = self.fig.add_axes([0.125, 0.05, 0.75, 0.15])
         self.ax_hist.set_facecolor(AXES_BG_COLOR)
         self.ax_hist.tick_params(colors=TEXT_COLOR, labelcolor=TEXT_COLOR)
         self.ax_hist.hist(self.data.flatten(), bins=1000, color=HIST_COLOR, alpha=0.5)
         self.ax_hist.set_yscale("linear")
         
-        # Vertical hover line for histogram (initially hidden)
         self.hover_line = self.ax_hist.axvline(x=0, color='red', linestyle='--', visible=False)
         
-        # Save original zoom limits
         self.original_xlim = self.ax_image.get_xlim()
         self.original_ylim = self.ax_image.get_ylim()
         
-        # Embed the figure in the parent frame with fixed dimensions
         parent_frame.config(width=800, height=600)
         self.canvas = FigureCanvasTkAgg(self.fig, master=parent_frame)
         widget = self.canvas.get_tk_widget()
@@ -146,17 +116,15 @@ class FITSViewer:
         widget.pack(fill="both", expand=True)
         self.canvas.draw()
         
-        # Initialize state variables
         self.auto_stretch = False
         self.log_hist = False
         self.show_sources = False
         self.selected_source_artist = None
-        self.source_artist = None  # for scatter overlay of all sources
+        self.source_artist = None 
         self._dragging = False
         self._last_event = None
         self._drag_moved = False
         
-        # Connect interactive events
         self.canvas.mpl_connect("motion_notify_event", self.update_cursor_stats)
         self.canvas.mpl_connect("button_press_event", self.on_press)
         self.canvas.mpl_connect("button_release_event", self.on_release)
@@ -218,12 +186,10 @@ class FITSViewer:
         self._last_event = None
     
     def on_click(self, event):
-        # If dragging occurred, do not update selection.
         if self._drag_moved:
             return
         if event.inaxes != self.ax_image or event.xdata is None or event.ydata is None:
             return
-        # Convert the click location to display (screen) coordinates.
         click_disp = self.ax_image.transData.transform((event.xdata, event.ydata))
         min_dist = float('inf')
         found = None
@@ -233,9 +199,8 @@ class FITSViewer:
             if dist < min_dist:
                 min_dist = dist
                 found = src
-        if min_dist <= 15:  # only snap if within 15 screen pixels
+        if min_dist <= 15:  
             src_coord = SkyCoord(ra=found["ra"] * u.deg, dec=found["dec"] * u.deg)
-            # Use calibrated magnitude if available; otherwise fall back to flux.
             if found.get("calibrated_mag") is not None:
                 mag_str = f"Mag: {found['calibrated_mag']:.2f}"
             else:
@@ -252,7 +217,6 @@ class FITSViewer:
                 transform=self.ax_image.get_transform('pixel')
             )
             self.canvas.draw_idle()
-        # Else, do nothing (retain current selection)
 
     
     def on_scroll(self, event):
@@ -322,7 +286,6 @@ class FITSViewer:
     
     def toggle_sources(self):
         if not self.show_sources:
-            # Use a single scatter artist for efficiency.
             x_coords = [src["xcentroid"] for src in self.detected_sources]
             y_coords = [src["ycentroid"] for src in self.detected_sources]
             self.source_artist = self.ax_image.scatter(x_coords, y_coords, s=40,

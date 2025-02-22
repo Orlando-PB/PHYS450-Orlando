@@ -2,7 +2,6 @@
 import os
 import json
 import math
-import numpy as np
 from astropy.io import fits
 from astropy.stats import sigma_clipped_stats
 from astropy.wcs import WCS
@@ -17,7 +16,6 @@ def build_wcs_from_astrometry(astrometry, nx, ny):
     
     scale = astrometry["Pixel Scale (arcsec/pixel)"] / 3600.0
     
-    # Orientation angle (in radians)
     theta = math.radians(astrometry["Orientation (degrees)"])
     
     cd11 = -scale * math.cos(theta)
@@ -35,7 +33,7 @@ def extract_sources(image_path, fwhm=3.0, threshold=5.0, astrometry_json_path=No
     with fits.open(image_path) as hdul:
         data = hdul[0].data.astype(float)
         header = hdul[0].header
-        ny, nx = data.shape  # image dimensions
+        ny, nx = data.shape 
 
     if astrometry_json_path is not None and os.path.exists(astrometry_json_path):
         with open(astrometry_json_path, "r") as infile:
@@ -55,14 +53,11 @@ def extract_sources(image_path, fwhm=3.0, threshold=5.0, astrometry_json_path=No
 
     sources = []
     for row in sources_table:
-        # Convert each column value to a Python float.
         source = {col: float(row[col]) for col in sources_table.colnames}
         
-        # Extract the pixel coordinates.
         xpix = source['xcentroid']
         ypix = source['ycentroid']
         
-        # Convert pixel coordinates to world coordinates using the chosen WCS.
         world_coords = wcs.wcs_pix2world([[xpix, ypix]], 0)[0]
         source['ra'] = float(world_coords[0])
         source['dec'] = float(world_coords[1])
