@@ -7,7 +7,7 @@ import psutil
 import os
 
 # --- Configuration ---
-API_KEY = "pyplbxajvnsqyifn"
+API_KEY = os.environ.get("ASTROMETRY_API_KEY", "")  # free key from nova.astrometry.net
 BASE_LOGIN_URL = "http://nova.astrometry.net/api/login"
 UPLOAD_URL = "http://nova.astrometry.net/api/upload"
 SUBMISSIONS_URL = "http://nova.astrometry.net/api/submissions"
